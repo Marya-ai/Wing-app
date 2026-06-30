@@ -1,0 +1,6 @@
+{
+  "name": "Wing",
+  "description": "An artisan social discovery platform with Pinterest-inspired masonry feeds, work-in-progress logs, private direct messages, real-time community chat rooms, and a helpful AI Mentor.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,142 @@
+{
+  "entities": {
+    "Profile": {
+      "title": "Profile",
+      "description": "User profile extending Auth",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "User UID from Firebase Auth" },
+        "username": { "type": "string", "description": "Unique username" },
+        "full_name": { "type": "string", "description": "Display name" },
+        "avatar_url": { "type": "string", "description": "Profile picture URL" },
+        "bio": { "type": "string", "description": "Short bio" },
+        "is_maker": { "type": "boolean", "description": "Whether user is a maker" },
+        "theme_preference": { "type": "string", "enum": ["light", "dark"], "description": "Preferred UI theme" },
+        "created_at": { "type": "string", "format": "date-time", "description": "Creation timestamp" }
+      },
+      "required": ["id", "username", "full_name", "is_maker"]
+    },
+    "Post": {
+      "title": "Post",
+      "description": "Artisan post or WIP showcase",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Post document ID" },
+        "user_id": { "type": "string", "description": "UID of author" },
+        "author_name": { "type": "string", "description": "Cached author name" },
+        "author_avatar": { "type": "string", "description": "Cached author avatar URL" },
+        "image_url": { "type": "string", "description": "Image or photo URL" },
+        "caption": { "type": "string", "description": "Description of work" },
+        "post_type": { "type": "string", "enum": ["finished", "wip"], "description": "Finished work or WIP" },
+        "materials": { "type": "array", "description": "Array of materials" },
+        "tools": { "type": "array", "description": "Array of tools used" },
+        "likes_count": { "type": "integer", "description": "Number of likes" },
+        "comments_count": { "type": "integer", "description": "Number of comments" },
+        "created_at": { "type": "string", "format": "date-time", "description": "Creation timestamp" }
+      },
+      "required": ["id", "user_id", "image_url", "caption", "post_type"]
+    },
+    "Comment": {
+      "title": "Comment",
+      "description": "Comment on a post",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Comment ID" },
+        "post_id": { "type": "string", "description": "Target post ID" },
+        "user_id": { "type": "string", "description": "UID of commenter" },
+        "username": { "type": "string", "description": "Username of commenter" },
+        "avatar_url": { "type": "string", "description": "Avatar of commenter" },
+        "content": { "type": "string", "description": "Comment text content" },
+        "created_at": { "type": "string", "format": "date-time", "description": "Creation timestamp" }
+      },
+      "required": ["id", "post_id", "user_id", "content", "created_at"]
+    },
+    "Save": {
+      "title": "Save",
+      "description": "Post saved to a user's collection or board",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Save record ID" },
+        "user_id": { "type": "string", "description": "UID of user who saved" },
+        "post_id": { "type": "string", "description": "Saved post ID" },
+        "board_name": { "type": "string", "description": "Name of the board" },
+        "created_at": { "type": "string", "format": "date-time", "description": "Creation timestamp" }
+      },
+      "required": ["id", "user_id", "post_id", "board_name", "created_at"]
+    },
+    "DailyLog": {
+      "title": "DailyLog",
+      "description": "Daily focus tracker for makers",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Log ID" },
+        "user_id": { "type": "string", "description": "UID of maker" },
+        "date_str": { "type": "string", "description": "Date as YYYY-MM-DD" },
+        "focus_goal": { "type": "string", "description": "Today's goal" },
+        "progress_pct": { "type": "integer", "description": "Progress percentage" },
+        "reflection": { "type": "string", "description": "Daily reflection notes" },
+        "created_at": { "type": "string", "format": "date-time", "description": "Creation timestamp" }
+      },
+      "required": ["id", "user_id", "date_str", "focus_goal", "progress_pct"]
+    },
+    "ChatRoom": {
+      "title": "ChatRoom",
+      "description": "Public channel or direct private chat room",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Room ID" },
+        "name": { "type": "string", "description": "Name of room or channel" },
+        "type": { "type": "string", "enum": ["public", "private"], "description": "Channel type" },
+        "participants": { "type": "array", "description": "UIDs of participants (for private chats)" },
+        "created_at": { "type": "string", "format": "date-time", "description": "Creation timestamp" }
+      },
+      "required": ["id", "name", "type"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "Message in a chat room",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Message ID" },
+        "room_id": { "type": "string", "description": "Room ID" },
+        "user_id": { "type": "string", "description": "Author UID" },
+        "username": { "type": "string", "description": "Author username" },
+        "avatar_url": { "type": "string", "description": "Author avatar" },
+        "content": { "type": "string", "description": "Text content" },
+        "image_url": { "type": "string", "description": "Optional attached image URL" },
+        "created_at": { "type": "string", "format": "date-time", "description": "Creation timestamp" }
+      },
+      "required": ["id", "room_id", "user_id", "content", "created_at"]
+    }
+  },
+  "firestore": {
+    "/profiles/{profileId}": {
+      "schema": "Profile",
+      "description": "User profiles"
+    },
+    "/posts/{postId}": {
+      "schema": "Post",
+      "description": "Artisan feed and WIP posts"
+    },
+    "/posts/{postId}/comments/{commentId}": {
+      "schema": "Comment",
+      "description": "Comments on specific posts"
+    },
+    "/saves/{saveId}": {
+      "schema": "Save",
+      "description": "Saved posts boards"
+    },
+    "/daily_logs/{logId}": {
+      "schema": "DailyLog",
+      "description": "Artisans daily trackers"
+    },
+    "/chat_rooms/{roomId}": {
+      "schema": "ChatRoom",
+      "description": "Public craft channels and DM rooms"
+    },
+    "/chat_rooms/{roomId}/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Messages inside chat rooms"
+    }
+  }
+}
