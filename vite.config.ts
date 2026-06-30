@@ -1,7 +1,7 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import {defineConfig} from 'vite';
+import { defineConfig } from 'vite';
 
 export default defineConfig(() => {
   return {
@@ -12,16 +12,17 @@ export default defineConfig(() => {
       },
     },
     server: {
-      // Use an array for allowed hosts to be more specific
+      // Updated to use Render URLs instead of dead ngrok
       allowedHosts: [
-        'tricking-sherry-guy.ngrok-free.dev',
-        '.ngrok-free.dev'
+        'wing-artisan-bot.onrender.com',
+        '.onrender.com',
+        'localhost'
       ],
-      host: true, 
+      host: true,
       port: 3000,
       strictPort: true,
 
-      // HMR settings (leave as is)
+      // HMR settings
       hmr: process.env.DISABLE_HMR !== 'true',
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
     },
