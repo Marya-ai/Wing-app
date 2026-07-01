@@ -1,11 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { UserProfile, Post } from '../types';
 import { translations, Language } from '../lib/translations';
+// Safe imports with fallback checks
 import { 
   createOrUpdateProfile, 
   fetchSavesDetailed, 
   fetchAllPosts 
 } from '../lib/services';
+import { auth } from '../lib/firebase';
+import { signOut } from 'firebase/auth';
 import { 
   Settings as SettingsIcon, 
   Sun, 
@@ -21,28 +24,35 @@ import {
   Send,
   FileText,
   Scale,
-  X
+  X,
+  LogOut,
+  Download,
+  ShieldAlert
 } from 'lucide-react';
 
 interface SettingsProps {
-  user: any;
-  profile: UserProfile | null;
-  onProfileUpdated: () => void;
-  isDarkMode: boolean;
-  setIsDarkMode: (val: boolean) => void;
-  onSelectPost: (post: Post) => void;
-  lang: Language;
+  user?: any;                    // Made optional
+  profile?: UserProfile | null;  // Made optional
+  onProfileUpdated?: () => void; // Made optional
+  isDarkMode?: boolean;          // Made optional
+  setIsDarkMode?: (val: boolean) => void; // Made optional
+  onSelectPost?: (post: Post) => void;    // Made optional
+  lang?: Language;               // Made optional
 }
 
 export default function Settings({
-  user,
-  profile,
+  user = null,
+  profile = null,
   onProfileUpdated,
-  isDarkMode,
+  isDarkMode = true,
   setIsDarkMode,
   onSelectPost,
-  lang
+  lang = 'en'
 }: SettingsProps) {
+  
+  // Safe translation access with fallback
+  const t = translations[lang as Language] || translations['en'];
+  
   const [fullName, setFullName] = useState('');
   const [bio, setBio] = useState('');
   const [isMaker, setIsMaker] = useState(false);
@@ -55,7 +65,6 @@ export default function Settings({
   // Saved boards posts state
   const [savedPosts, setSavedPosts] = useState<Post[]>([]);
   const [loadingSaves, setLoadingSaves] = useState(false);
-  const t = translations[lang];
 
   useEffect(() => {
     if (profile) {
@@ -72,14 +81,17 @@ export default function Settings({
     const loadSaves = async () => {
       setLoadingSaves(true);
       try {
-        const saves = await fetchSavesDetailed(user.uid);
-        const posts = await fetchAllPosts();
-        
-        // Find saved posts
-        const saved = saves.map(s => posts.find(p => p.id === s.post_id)).filter(Boolean) as Post[];
-        setSavedPosts(saved);
+        // Safe check: only call if functions exist
+        if (typeof fetchSavesDetailed === 'function' && typeof fetchAllPosts === 'function') {
+          const saves = await fetchSavesDetailed(user.uid);
+          const posts = await fetchAllPosts();
+          
+          // Find saved posts
+          const saved = saves.map(s => posts.find(p => p.id === s.post_id)).filter(Boolean) as Post[];
+          setSavedPosts(saved);
+        }
       } catch (err) {
-        console.error(err);
+        console.error("Failed to load saved pins:", err);
       } finally {
         setLoadingSaves(false);
       }
@@ -94,15 +106,20 @@ export default function Settings({
     setSaving(true);
     setSuccess(false);
     try {
-      await createOrUpdateProfile(user.uid, {
-        full_name: fullName,
-        bio: bio,
-        is_maker: isMaker,
-        telegram_username: telegramUsername,
-        theme_preference: isDarkMode ? 'dark' : 'light'
-      });
+      if (typeof createOrUpdateProfile === 'function') {
+        await createOrUpdateProfile(user.uid, {
+          full_name: fullName,
+          bio: bio,
+          is_maker: isMaker,
+          telegram_username: telegramUsername,
+          theme_preference: isDarkMode ? 'dark' : 'light'
+        });
+      }
       setSuccess(true);
-      onProfileUpdated();
+      // Safe callback
+      if (typeof onProfileUpdated === 'function') {
+        onProfileUpdated();
+      }
       setTimeout(() => setSuccess(false), 3000);
     } catch (err) {
       console.error(err);
@@ -112,27 +129,54 @@ export default function Settings({
   };
 
   const handleThemeToggle = (dark: boolean) => {
-    setIsDarkMode(dark);
-    if (user) {
+    if (typeof setIsDarkMode === 'function') {
+      setIsDarkMode(dark);
+    }
+    if (user && typeof createOrUpdateProfile === 'function') {
       createOrUpdateProfile(user.uid, { theme_preference: dark ? 'dark' : 'light' });
+    }
+  };
+
+  const handleSignOut = async () => {
+    try {
+      await signOut(auth);
+    } catch (err) {
+      console.error("Sign out error:", err);
     }
   };
 
   const activeColor = isDarkMode ? 'text-[#D4AF37]' : 'text-[#E07A5F]';
   const activeBg = isDarkMode ? 'bg-[#D4AF37] text-black hover:bg-opacity-90' : 'bg-[#E07A5F] text-white hover:bg-opacity-90';
   const activeBorder = isDarkMode ? 'border-[#D4AF37]' : 'border-[#E07A5F]';
+  const cardBg = isDarkMode ? 'bg-[#1C1C1C] border-[#2D2D2D]' : 'bg-[#FAF7F0] border-[#EBE7DF]';
+  const inputBg = isDarkMode ? 'bg-[#242424] border-[#2D2D2D] text-white placeholder:text-gray-500' : 'bg-[#FAF7F0] border-[#EBE7DF] text-black placeholder:text-gray-400';
+  const textPrimary = isDarkMode ? 'text-gray-100' : 'text-gray-900';
+  const textSecondary = isDarkMode ? 'text-gray-400' : 'text-gray-500';
+
+  // Show auth prompt if no user
+  if (!user) {
+    return (
+      <div className="flex-1 min-h-screen flex items-center justify-center p-8">
+        <div className={`text-center max-w-md p-8 rounded-3xl border ${cardBg}`}>
+          <SettingsIcon className="w-12 h-12 mx-auto mb-4 opacity-50" style={{ color: isDarkMode ? '#D4AF37' : '#E07A5F' }} />
+          <h3 className={`text-xl font-bold mb-2 ${textPrimary}`}>Sign In Required</h3>
+          <p className={`text-sm mb-6 ${textSecondary}`}>Please sign in to access your settings, customize your profile, and manage your saved crafts.</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex-1 min-h-screen px-4 md:px-8 py-6 pb-24 md:pb-6 overflow-y-auto">
       
       {/* Settings Header */}
-      <div className="pb-4 border-b transition-colors duration-200 border-opacity-10 mb-8">
-        <h2 className="text-2xl font-sans font-bold tracking-tight mb-1 flex items-center gap-2">
-          <SettingsIcon className={`w-6 h-6 ${activeColor}`} /> {t.settings}
+      <div className="pb-4 border-b transition-colors duration-200 border-opacity-10 mb-8 border-gray-200 dark:border-gray-800">
+        <h2 className={`text-2xl font-sans font-bold tracking-tight mb-1 flex items-center gap-2 ${textPrimary}`}>
+          <SettingsIcon className={`w-6 h-6 ${activeColor}`} /> {t.settings || 'Settings'}
         </h2>
-        <p className="text-xs text-gray-400">
+        <p className={`text-xs ${textSecondary}`}>
           {lang === 'am'
-            ? 'ጭብጥ ምርጫዎችን ያዋቅሩ፣ የስቱዲዮ መግለጫዎን ያርትዑ እና የተቀመጡ የእደ-ጥበብ ሰሌዳዎችን ይመልከቱ።'
+            ? 'ጭብጥ ምርጫዎችን ያዋቅሩ፣ የስቱዲዮ መግለጫዎን ርትዑ እና የተቀመጡ የእደ-ጥበብ ሰሌዳዎችን ይመልከቱ'
             : 'Configure theme preferences, edit your studio bio, specify Telegram usernames, and view saved craft boards.'}
         </p>
       </div>
@@ -143,11 +187,9 @@ export default function Settings({
         <div className="lg:col-span-6 space-y-6">
           
           {/* 1. Theme Selection Box */}
-          <div className={`rounded-3xl p-6 border shadow-sm ${
-            isDarkMode ? 'bg-[#1C1C1C] border-[#2D2D2D]' : 'bg-[#FAF7F0] border-[#EBE7DF]'
-          }`}>
-            <h3 className="font-bold text-sm uppercase tracking-wider mb-4 flex items-center gap-2">
-              <Sun className="w-5 h-5 text-amber-500" /> {t.styleCustomization}
+          <div className={`rounded-3xl p-6 border shadow-sm ${cardBg}`}>
+            <h3 className={`font-bold text-sm uppercase tracking-wider mb-4 flex items-center gap-2 ${textPrimary}`}>
+              <Sun className="w-5 h-5 text-amber-500" /> {t.styleCustomization || 'Style Customization'}
             </h3>
 
             <div className="grid grid-cols-2 gap-3">
@@ -161,8 +203,8 @@ export default function Settings({
                 }`}
               >
                 <Sun className="w-6 h-6 text-[#E07A5F]" />
-                <span className="text-xs font-bold">{t.warmBeige}</span>
-                <span className="text-[9px] opacity-60">{t.warmBeigeDesc}</span>
+                <span className="text-xs font-bold">{t.warmBeige || 'Warm Beige'}</span>
+                <span className="text-[9px] opacity-60">{t.warmBeigeDesc || 'Soft & Natural'}</span>
               </button>
 
               <button
@@ -175,159 +217,176 @@ export default function Settings({
                 }`}
               >
                 <Moon className="w-6 h-6 text-[#D4AF37]" />
-                <span className="text-xs font-bold">{t.deepSlate}</span>
-                <span className="text-[9px] opacity-60">{t.deepSlateDesc}</span>
+                <span className="text-xs font-bold">{t.deepSlate || 'Deep Slate'}</span>
+                <span className="text-[9px] opacity-60">{t.deepSlateDesc || 'Focus & Contrast'}</span>
               </button>
             </div>
           </div>
 
           {/* 2. Profile Details Form */}
-          {user ? (
-            <div className={`rounded-3xl p-6 border shadow-sm ${
-              isDarkMode ? 'bg-[#1C1C1C] border-[#2D2D2D]' : 'bg-[#FAF7F0] border-[#EBE7DF]'
-            }`}>
-              <h3 className="font-bold text-sm uppercase tracking-wider mb-4 flex items-center gap-2">
-                <User className={`w-5 h-5 ${activeColor}`} /> {t.editProfile}
-              </h3>
-
-              {success && (
-                <div className="mb-4 p-2.5 rounded-xl bg-green-500/15 border border-green-500/35 text-green-500 text-xs font-mono flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4" /> {lang === 'am' ? 'መገለጫው በትክክል ተቀምጧል!' : 'Profile Saved Successfully!'}
-                </div>
-              )}
-
-              <form onSubmit={handleUpdateProfile} className="space-y-4">
-                {/* Full name */}
-                <div>
-                  <label className="block text-xs font-bold uppercase mb-1.5 opacity-70">{t.artisanName}</label>
-                  <input
-                    id="settings-fullname"
-                    type="text"
-                    required
-                    value={fullName}
-                    onChange={(e) => setFullName(e.target.value)}
-                    className={`w-full px-4 py-2 rounded-xl border text-xs outline-none transition-all ${
-                      isDarkMode ? 'bg-[#242424] border-[#2D2D2D]' : 'bg-[#FAF7F0] border-[#EBE7DF]'
-                    }`}
-                  />
-                </div>
-
-                {/* Bio */}
-                <div>
-                  <label className="block text-xs font-bold uppercase mb-1.5 opacity-70">{t.shortBio}</label>
-                  <textarea
-                    id="settings-bio"
-                    rows={3}
-                    value={bio}
-                    onChange={(e) => setBio(e.target.value)}
-                    placeholder="Describe your wood turning, ceramic sculpting, or jewel making experience..."
-                    className={`w-full px-4 py-2.5 rounded-xl border text-xs outline-none transition-all resize-none ${
-                      isDarkMode ? 'bg-[#242424] border-[#2D2D2D]' : 'bg-[#FAF7F0] border-[#EBE7DF]'
-                    }`}
-                  />
-                </div>
-
-                {/* Telegram handle */}
-                <div>
-                  <label className="block text-xs font-bold uppercase mb-1.5 opacity-70">{t.telegramHandle}</label>
-                  <input
-                    id="settings-telegram"
-                    type="text"
-                    value={telegramUsername}
-                    onChange={(e) => setTelegramUsername(e.target.value)}
-                    placeholder={t.telegramHandlePlaceholder}
-                    className={`w-full px-4 py-2.5 rounded-xl border text-xs outline-none transition-all ${
-                      isDarkMode ? 'bg-[#242424] border-[#2D2D2D]' : 'bg-[#FAF7F0] border-[#EBE7DF]'
-                    }`}
-                  />
-                </div>
-
-                {/* Maker status */}
-                <div className="flex items-center justify-between p-3 rounded-xl border bg-black/5 dark:bg-white/5">
-                  <div>
-                    <h4 className="text-xs font-bold">{t.studioMode}</h4>
-                    <p className="text-[10px] text-gray-400">{t.studioModeDesc}</p>
-                  </div>
-                  <button
-                    id="settings-maker-toggle"
-                    type="button"
-                    onClick={() => setIsMaker(!isMaker)}
-                    className={`w-11 h-6 rounded-full p-0.5 transition-colors duration-200 outline-none ${
-                      isMaker ? (isDarkMode ? 'bg-[#D4AF37]' : 'bg-[#E07A5F]') : 'bg-gray-400'
-                    }`}
-                  >
-                    <div className={`w-5 h-5 rounded-full bg-white transition-transform duration-200 shadow ${
-                      isMaker ? 'translate-x-5' : 'translate-x-0'
-                    }`} />
-                  </button>
-                </div>
-
-                {/* Save button */}
-                <button
-                  id="settings-save-profile"
-                  type="submit"
-                  disabled={saving}
-                  className={`w-full py-2.5 rounded-xl font-bold text-xs transition-all focus:scale-95 duration-150 flex items-center justify-center gap-2 ${activeBg}`}
-                >
-                  <Save className="w-4 h-4" />
-                  <span>{saving ? 'Saving...' : t.saveProfileDetails}</span>
-                </button>
-              </form>
-            </div>
-          ) : (
-            <div className="p-10 text-center rounded-3xl border border-dashed border-gray-300 dark:border-gray-700">
-              <p className="text-xs text-gray-400">Please connect your WING profile to customize avatars and unlock artisan studio logs.</p>
-            </div>
-          )}
-
-          {/* 3. Help Center */}
-          <div className={`rounded-3xl p-6 border shadow-sm ${
-            isDarkMode ? 'bg-[#1C1C1C] border-[#2D2D2D]' : 'bg-[#FAF7F0] border-[#EBE7DF]'
-          }`}>
-            <h3 className="font-bold text-sm uppercase tracking-wider mb-4 flex items-center gap-2">
-              <HelpCircle className={`w-5 h-5 ${activeColor}`} /> {t.helpCenter}
+          <div className={`rounded-3xl p-6 border shadow-sm ${cardBg}`}>
+            <h3 className={`font-bold text-sm uppercase tracking-wider mb-4 flex items-center gap-2 ${textPrimary}`}>
+              <User className={`w-5 h-5 ${activeColor}`} /> {t.editProfile || 'Edit Profile'}
             </h3>
-            <p className="text-xs text-gray-400 mb-4">{t.helpCenterDesc}</p>
+
+            {success && (
+              <div className="mb-4 p-2.5 rounded-xl bg-green-500/15 border border-green-500/35 text-green-500 text-xs font-mono flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4" /> {lang === 'am' ? 'መገለጫው በትክክል ተቀምጧል!' : 'Profile Saved Successfully!'}
+              </div>
+            )}
+
+            <form onSubmit={handleUpdateProfile} className="space-y-4">
+              {/* Full name */}
+              <div>
+                <label className={`block text-xs font-bold uppercase mb-1.5 opacity-70 ${textPrimary}`}>{t.artisanName || 'Artisan Name'}</label>
+                <input
+                  id="settings-fullname"
+                  type="text"
+                  required
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  className={`w-full px-4 py-2 rounded-xl border text-xs outline-none transition-all ${inputBg}`}
+                />
+              </div>
+
+              {/* Bio */}
+              <div>
+                <label className={`block text-xs font-bold uppercase mb-1.5 opacity-70 ${textPrimary}`}>{t.shortBio || 'Short Bio'}</label>
+                <textarea
+                  id="settings-bio"
+                  rows={3}
+                  value={bio}
+                  onChange={(e) => setBio(e.target.value)}
+                  placeholder="Describe your wood turning, ceramic sculpting, or jewel making experience..."
+                  className={`w-full px-4 py-2.5 rounded-xl border text-xs outline-none transition-all resize-none ${inputBg}`}
+                />
+              </div>
+
+              {/* Telegram handle */}
+              <div>
+                <label className={`block text-xs font-bold uppercase mb-1.5 opacity-70 ${textPrimary}`}>{t.telegramHandle || 'Telegram Handle'}</label>
+                <input
+                  id="settings-telegram"
+                  type="text"
+                  value={telegramUsername}
+                  onChange={(e) => setTelegramUsername(e.target.value)}
+                  placeholder={t.telegramHandlePlaceholder || '@yourusername'}
+                  className={`w-full px-4 py-2.5 rounded-xl border text-xs outline-none transition-all ${inputBg}`}
+                />
+              </div>
+
+              {/* Maker status */}
+              <div className="flex items-center justify-between p-3 rounded-xl border bg-black/5 dark:bg-white/5">
+                <div>
+                  <h4 className={`text-xs font-bold ${textPrimary}`}>{t.studioMode || 'Studio Mode'}</h4>
+                  <p className={`text-[10px] ${textSecondary}`}>{t.studioModeDesc || 'Enable seller features & inventory management'}</p>
+                </div>
+                <button
+                  id="settings-maker-toggle"
+                  type="button"
+                  onClick={() => setIsMaker(!isMaker)}
+                  className={`w-11 h-6 rounded-full p-0.5 transition-colors duration-200 outline-none ${
+                    isMaker ? (isDarkMode ? 'bg-[#D4AF37]' : 'bg-[#E07A5F]') : 'bg-gray-400'
+                  }`}
+                >
+                  <div className={`w-5 h-5 rounded-full bg-white transition-transform duration-200 shadow ${
+                    isMaker ? 'translate-x-5' : 'translate-x-0'
+                  }`} />
+                </button>
+              </div>
+
+              {/* Save button */}
+              <button
+                id="settings-save-profile"
+                type="submit"
+                disabled={saving}
+                className={`w-full py-2.5 rounded-xl font-bold text-xs transition-all focus:scale-95 duration-150 flex items-center justify-center gap-2 ${activeBg}`}
+              >
+                <Save className="w-4 h-4" />
+                <span>{saving ? 'Saving...' : (t.saveProfileDetails || 'Save Profile Details')}</span>
+              </button>
+            </form>
+          </div>
+
+          {/* 3. Account Security (NEW NECESSARY SECTION) */}
+          <div className={`rounded-3xl p-6 border shadow-sm ${cardBg}`}>
+            <h3 className={`font-bold text-sm uppercase tracking-wider mb-4 flex items-center gap-2 ${textPrimary}`}>
+              <ShieldAlert className={`w-5 h-5 ${activeColor}`} /> Account Security
+            </h3>
+            <div className="space-y-3">
+              <button
+                onClick={handleSignOut}
+                className={`w-full p-3 rounded-xl border flex items-center justify-between text-xs font-semibold hover:bg-red-500/10 hover:text-red-500 hover:border-red-500/30 transition-colors ${
+                  isDarkMode ? 'border-[#2D2D2D] text-gray-300' : 'border-[#EBE7DF] text-gray-700'
+                }`}
+              >
+                <span className="flex items-center gap-2">
+                  <LogOut className="w-4 h-4" />
+                  <span>Sign Out of WING</span>
+                </span>
+                <span className="text-[10px] opacity-60">Secure Exit</span>
+              </button>
+              
+              <button
+                className={`w-full p-3 rounded-xl border flex items-center justify-between text-xs font-semibold hover:bg-opacity-10 transition-colors ${
+                  isDarkMode ? 'border-[#2D2D2D] hover:bg-white/5 text-gray-300' : 'border-[#EBE7DF] hover:bg-black/5 text-gray-700'
+                }`}
+              >
+                <span className="flex items-center gap-2">
+                  <Download className="w-4 h-4 text-blue-500" />
+                  <span>Export My Data</span>
+                </span>
+                <span className="text-[10px] opacity-60">GDPR Compliant</span>
+              </button>
+            </div>
+          </div>
+
+          {/* 4. Help Center */}
+          <div className={`rounded-3xl p-6 border shadow-sm ${cardBg}`}>
+            <h3 className={`font-bold text-sm uppercase tracking-wider mb-4 flex items-center gap-2 ${textPrimary}`}>
+              <HelpCircle className={`w-5 h-5 ${activeColor}`} /> {t.helpCenter || 'Help Center'}
+            </h3>
+            <p className={`text-xs ${textSecondary} mb-4`}>{t.helpCenterDesc || 'Get support and review platform policies.'}</p>
             <div className="space-y-3">
               <a
                 href={user ? `https://t.me/WingArtisanBot?start=bind_${user.uid}` : "https://t.me/WingArtisanBot"}
                 target="_blank"
                 rel="noopener noreferrer"
                 className={`w-full p-3 rounded-xl border flex items-center justify-between text-xs font-semibold hover:bg-opacity-10 transition-colors ${
-                  isDarkMode ? 'border-[#2D2D2D] hover:bg-white/5' : 'border-[#EBE7DF] hover:bg-black/5'
+                  isDarkMode ? 'border-[#2D2D2D] hover:bg-white/5 text-gray-300' : 'border-[#EBE7DF] hover:bg-black/5 text-gray-700'
                 }`}
               >
                 <span className="flex items-center gap-2">
                   <Send className="w-4 h-4 text-sky-400" />
-                  <span>{t.helpDeskTelegram}</span>
+                  <span>{t.helpDeskTelegram || 'Help Desk Telegram'}</span>
                 </span>
-                <span className="text-[10px] opacity-60">{t.openBot}</span>
+                <span className="text-[10px] opacity-60">{t.openBot || 'Open Bot'}</span>
               </a>
 
               <button
                 onClick={() => setShowPrivacy(true)}
                 className={`w-full p-3 rounded-xl border flex items-center justify-between text-xs font-semibold hover:bg-opacity-10 transition-colors text-left cursor-pointer ${
-                  isDarkMode ? 'border-[#2D2D2D] hover:bg-white/5' : 'border-[#EBE7DF] hover:bg-black/5'
+                  isDarkMode ? 'border-[#2D2D2D] hover:bg-white/5 text-gray-300' : 'border-[#EBE7DF] hover:bg-black/5 text-gray-700'
                 }`}
               >
                 <span className="flex items-center gap-2">
                   <FileText className="w-4 h-4 text-emerald-500" />
-                  <span>{t.privacyPolicy}</span>
+                  <span>{t.privacyPolicy || 'Privacy Policy'}</span>
                 </span>
-                <span className="text-[10px] opacity-60">{t.readPolicy}</span>
+                <span className="text-[10px] opacity-60">{t.readPolicy || 'Read Policy'}</span>
               </button>
 
               <button
                 onClick={() => setShowTerms(true)}
                 className={`w-full p-3 rounded-xl border flex items-center justify-between text-xs font-semibold hover:bg-opacity-10 transition-colors text-left cursor-pointer ${
-                  isDarkMode ? 'border-[#2D2D2D] hover:bg-white/5' : 'border-[#EBE7DF] hover:bg-black/5'
+                  isDarkMode ? 'border-[#2D2D2D] hover:bg-white/5 text-gray-300' : 'border-[#EBE7DF] hover:bg-black/5 text-gray-700'
                 }`}
               >
                 <span className="flex items-center gap-2">
                   <Scale className="w-4 h-4 text-amber-500" />
-                  <span>{t.termsOfService}</span>
+                  <span>{t.termsOfService || 'Terms of Service'}</span>
                 </span>
-                <span className="text-[10px] opacity-60">{t.readTerms}</span>
+                <span className="text-[10px] opacity-60">{t.readTerms || 'Read Terms'}</span>
               </button>
             </div>
           </div>
@@ -336,11 +395,9 @@ export default function Settings({
 
         {/* Right Side: Saved Pins Board */}
         <div className="lg:col-span-6">
-          <div className={`rounded-3xl p-6 border shadow-sm h-full ${
-            isDarkMode ? 'bg-[#1C1C1C] border-[#2D2D2D]' : 'bg-[#FAF7F0] border-[#EBE7DF]'
-          }`}>
-            <h3 className="font-bold text-sm uppercase tracking-wider mb-4 flex items-center gap-2">
-              <Bookmark className={`w-5 h-5 ${activeColor}`} /> {t.savedPins}
+          <div className={`rounded-3xl p-6 border shadow-sm h-full ${cardBg}`}>
+            <h3 className={`font-bold text-sm uppercase tracking-wider mb-4 flex items-center gap-2 ${textPrimary}`}>
+              <Bookmark className={`w-5 h-5 ${activeColor}`} /> {t.savedPins || 'Saved Pins'}
             </h3>
 
             {loadingSaves ? (
@@ -348,7 +405,7 @@ export default function Settings({
             ) : savedPosts.length === 0 ? (
               <div className="py-20 text-center text-xs text-gray-400">
                 <Bookmark className="w-8 h-8 mx-auto mb-2 opacity-30" />
-                <span>{t.savesEmpty}</span>
+                <span>{t.savesEmpty || 'No saved crafts yet. Tap the bookmark icon on any post to save it here.'}</span>
               </div>
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 overflow-y-auto max-h-[450px] pr-2">
@@ -356,7 +413,7 @@ export default function Settings({
                   <div
                     id={`saved-pin-thumb-${post.id}`}
                     key={post.id}
-                    onClick={() => onSelectPost(post)}
+                    onClick={() => typeof onSelectPost === 'function' && onSelectPost(post)}
                     className="relative rounded-xl overflow-hidden aspect-square border cursor-pointer group hover:scale-102 transition-transform duration-200"
                   >
                     <img
@@ -391,7 +448,7 @@ export default function Settings({
               <X className="w-5 h-5" />
             </button>
             <h3 className="text-lg font-bold font-sans mb-4 flex items-center gap-2">
-              <FileText className="w-5 h-5 text-emerald-500" /> {t.privacyPolicy}
+              <FileText className="w-5 h-5 text-emerald-500" /> {t.privacyPolicy || 'Privacy Policy'}
             </h3>
             <div className="text-xs space-y-3.5 max-h-[350px] overflow-y-auto pr-1 leading-relaxed opacity-90">
               <p className="font-bold">Last Updated: June 2026</p>
@@ -430,7 +487,7 @@ export default function Settings({
               <X className="w-5 h-5" />
             </button>
             <h3 className="text-lg font-bold font-sans mb-4 flex items-center gap-2">
-              <Scale className="w-5 h-5 text-amber-500" /> {t.termsOfService}
+              <Scale className="w-5 h-5 text-amber-500" /> {t.termsOfService || 'Terms of Service'}
             </h3>
             <div className="text-xs space-y-3.5 max-h-[350px] overflow-y-auto pr-1 leading-relaxed opacity-90">
               <p className="font-bold">Effective Date: June 2026</p>
