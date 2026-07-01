@@ -164,7 +164,7 @@ export default function SellerDashboard({
           <Package className="w-8 h-8 text-blue-500 mb-6" />
           <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Active Crafts</h4>
           <p className={`text-4xl font-black mt-2 ${isDarkMode ? 'text-white' : 'text-black'}`}>
-            {myPosts.filter(p => p.sales_status === 'available').length}
+            {myPosts.filter(p => (p.sales_status || 'available') === 'available').length}
           </p>
         </div>
         <div className={`p-10 rounded-[3rem] border ${isDarkMode ? 'bg-[#111] border-gray-800' : 'bg-white border-gray-100 shadow-sm'}`}>
@@ -198,59 +198,66 @@ export default function SellerDashboard({
               <History className="w-16 h-16 mx-auto mb-6 text-gray-300 opacity-20" />
               <p className="text-[10px] font-black text-gray-500 uppercase tracking-[0.3em]">No crafts posted yet.</p>
             </div>
-          ) : myPosts.map((post) => (
-            <div key={post.id} className={`p-6 rounded-[3rem] border flex flex-col md:flex-row items-center justify-between gap-8 transition-all hover:scale-[1.01] ${isDarkMode ? 'bg-[#111] border-gray-800 hover:border-gray-700' : 'bg-white border-gray-100 shadow-sm'}`}>
-              <div className="flex items-center gap-8 w-full md:w-auto">
-                <div className="relative shrink-0">
-                  <img src={post.image_url} className={`w-24 h-24 rounded-[2rem] object-cover shadow-2xl ${post.sales_status !== 'available' ? 'grayscale opacity-30' : ''}`} alt="" />
-                  {post.sales_status === 'pending_verification' && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-black/40 rounded-[2rem]">
-                      <Clock className="w-10 h-10 text-white animate-spin-slow" />
+          ) : myPosts.map((post) => {
+            // FIX: Safe defaults for potentially undefined fields
+            const safeStatus = post.sales_status || 'available';
+            const safePrice = post.price || 0;
+            const safeCaption = post.caption || "Handmade Piece";
+
+            return (
+              <div key={post.id} className={`p-6 rounded-[3rem] border flex flex-col md:flex-row items-center justify-between gap-8 transition-all hover:scale-[1.01] ${isDarkMode ? 'bg-[#111] border-gray-800 hover:border-gray-700' : 'bg-white border-gray-100 shadow-sm'}`}>
+                <div className="flex items-center gap-8 w-full md:w-auto">
+                  <div className="relative shrink-0">
+                    <img src={post.image_url} className={`w-24 h-24 rounded-[2rem] object-cover shadow-2xl ${safeStatus !== 'available' ? 'grayscale opacity-30' : ''}`} alt="" />
+                    {safeStatus === 'pending_verification' && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-black/40 rounded-[2rem]">
+                        <Clock className="w-10 h-10 text-white animate-spin-slow" />
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <h4 className={`text-lg font-black uppercase tracking-tight mb-2 ${isDarkMode ? 'text-white' : 'text-black'}`}>
+                      {safeCaption.substring(0, 40)}...
+                    </h4>
+                    <div className="flex items-center gap-4">
+                      <span className={`text-xs font-black px-4 py-1.5 rounded-xl bg-gray-100 dark:bg-white/5 ${activeColor}`}>
+                        {safePrice.toLocaleString()} ETB
+                      </span>
+                      <span className={`text-[9px] font-black uppercase px-4 py-1.5 rounded-full border ${
+                        safeStatus === 'available' ? 'border-green-500/30 text-green-500' : 
+                        safeStatus === 'pending_verification' ? 'border-blue-500/30 text-blue-500' : 
+                        'border-gray-500/30 text-gray-500'
+                      }`}>
+                        {safeStatus.replace('_', ' ')}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="w-full md:w-auto">
+                  {safeStatus === 'available' && !isRestricted && (
+                    <button 
+                      onClick={() => { setReportingPost(post); setStep('input'); }}
+                      className={`w-full md:w-auto flex items-center justify-center gap-3 px-12 py-5 rounded-[1.5rem] font-black text-[10px] uppercase tracking-widest shadow-2xl transition-all active:scale-95 ${activeBg}`}
+                    >
+                      Mark Sold <ArrowRight className="w-4 h-4" />
+                    </button>
+                  )}
+                  {safeStatus === 'pending_verification' && (
+                    <div className="px-8 py-4 bg-blue-500/10 rounded-2xl text-center border border-blue-500/20">
+                       <p className="text-[10px] font-black text-blue-500 uppercase tracking-widest">Awaiting Admin</p>
+                    </div>
+                  )}
+                  {safeStatus === 'sold' && (
+                    <div className="flex items-center gap-2 text-green-500 bg-green-500/10 px-8 py-4 rounded-2xl border border-green-500/20">
+                      <CheckCircle className="w-4 h-4" />
+                      <span className="text-[10px] font-black uppercase tracking-widest">Verified</span>
                     </div>
                   )}
                 </div>
-                <div>
-                  <h4 className={`text-lg font-black uppercase tracking-tight mb-2 ${isDarkMode ? 'text-white' : 'text-black'}`}>
-                    {post.caption?.substring(0, 40) || "Handmade Piece"}...
-                  </h4>
-                  <div className="flex items-center gap-4">
-                    <span className={`text-xs font-black px-4 py-1.5 rounded-xl bg-gray-100 dark:bg-white/5 ${activeColor}`}>
-                      {post.price?.toLocaleString()} ETB
-                    </span>
-                    <span className={`text-[9px] font-black uppercase px-4 py-1.5 rounded-full border ${
-                      post.sales_status === 'available' ? 'border-green-500/30 text-green-500' : 
-                      post.sales_status === 'pending_verification' ? 'border-blue-500/30 text-blue-500' : 
-                      'border-gray-500/30 text-gray-500'
-                    }`}>
-                      {post.sales_status.replace('_', ' ')}
-                    </span>
-                  </div>
-                </div>
               </div>
-
-              <div className="w-full md:w-auto">
-                {post.sales_status === 'available' && !isRestricted && (
-                  <button 
-                    onClick={() => { setReportingPost(post); setStep('input'); }}
-                    className={`w-full md:w-auto flex items-center justify-center gap-3 px-12 py-5 rounded-[1.5rem] font-black text-[10px] uppercase tracking-widest shadow-2xl transition-all active:scale-95 ${activeBg}`}
-                  >
-                    Mark Sold <ArrowRight className="w-4 h-4" />
-                  </button>
-                )}
-                {post.sales_status === 'pending_verification' && (
-                  <div className="px-8 py-4 bg-blue-500/10 rounded-2xl text-center border border-blue-500/20">
-                     <p className="text-[10px] font-black text-blue-500 uppercase tracking-widest">Awaiting Admin</p>
-                  </div>
-                )}
-                {post.sales_status === 'sold' && (
-                  <div className="flex items-center gap-2 text-green-500 bg-green-500/10 px-8 py-4 rounded-2xl border border-green-500/20">
-                    <CheckCircle className="w-4 h-4" />
-                    <span className="text-[10px] font-black uppercase tracking-widest">Verified</span>
-                  </div>
-                )}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 
