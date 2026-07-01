@@ -92,14 +92,16 @@ export default function AdminDashboard({
 
   // --- LOGIC ---
   const filteredReports = reports.filter(r => {
-    const matchesFilter = r.status === filter;
-    const matchesSearch = r.token?.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                          r.sellerName?.toLowerCase().includes(searchTerm.toLowerCase());
+    // FIX: Safe access to potentially undefined fields
+    const rStatus = r.status || 'verifying';
+    const matchesFilter = rStatus === filter;
+    const matchesSearch = (r.token || '').toLowerCase().includes(searchTerm.toLowerCase()) || 
+                          (r.sellerName || '').toLowerCase().includes(searchTerm.toLowerCase());
     return matchesFilter && matchesSearch;
   });
 
   const pendingRevenue = reports
-    .filter(r => r.status === 'verifying')
+    .filter(r => (r.status || 'verifying') === 'verifying')
     .reduce((sum, r) => sum + (r.commission || 0), 0);
 
   const totalCollected = reports
@@ -249,46 +251,56 @@ export default function AdminDashboard({
                   <tr><td colSpan={5} className="p-20 text-center text-xs font-black uppercase opacity-30">Loading Cloud Data...</td></tr>
                 ) : filteredReports.length === 0 ? (
                   <tr><td colSpan={5} className="p-20 text-center text-xs font-black uppercase opacity-30">No {filter} reports found</td></tr>
-                ) : filteredReports.map((report) => (
-                  <tr key={report.id} className="hover:bg-white/5 transition-colors">
-                    <td className="p-8">
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-gray-700 to-gray-500 flex items-center justify-center text-[10px] text-white font-bold">
-                          {report.sellerName?.charAt(0) || 'U'}
+                ) : filteredReports.map((report) => {
+                  // FIX: Safe defaults for all report properties
+                  const rStatus = report.status || 'verifying';
+                  const rToken = report.token || 'N/A';
+                  const rSeller = report.sellerName || 'Anonymous';
+                  const rCommission = report.commission || 0;
+                  const rAmount = report.amount || 0;
+                  const rInitial = rSeller.charAt(0).toUpperCase();
+
+                  return (
+                    <tr key={report.id} className="hover:bg-white/5 transition-colors">
+                      <td className="p-8">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-gray-700 to-gray-500 flex items-center justify-center text-[10px] text-white font-bold">
+                            {rInitial}
+                          </div>
+                          <span className={`text-xs font-black ${isDarkMode ? 'text-white' : 'text-black'}`}>{rSeller}</span>
                         </div>
-                        <span className={`text-xs font-black ${isDarkMode ? 'text-white' : 'text-black'}`}>{report.sellerName || 'Anonymous'}</span>
-                      </div>
-                    </td>
-                    <td className="p-8">
-                      <span className="font-mono text-sm font-black p-3 rounded-xl bg-blue-500/10 text-blue-500 border border-blue-500/20">
-                        {report.token}
-                      </span>
-                    </td>
-                    <td className="p-8">
-                      <div className="flex flex-col">
-                        <span className={`text-lg font-black ${activeColor}`}>{report.commission} ETB</span>
-                        <span className="text-[9px] font-bold text-gray-500 uppercase">15% of {report.amount} ETB</span>
-                      </div>
-                    </td>
-                    <td className="p-8">
-                      <div className={`flex items-center gap-2 text-[10px] font-black uppercase px-4 py-2 rounded-full w-fit ${
-                        report.status === 'completed' ? 'bg-green-500/10 text-green-500' : 
-                        report.status === 'verifying' ? 'bg-blue-500/10 text-blue-500' : 'bg-red-500/10 text-red-500'
-                      }`}>
-                        {report.status === 'verifying' && <Clock className="w-3 h-3" />}
-                        {report.status.replace('_', ' ')}
-                      </div>
-                    </td>
-                    <td className="p-8">
-                      <button 
-                        onClick={() => setSelectedReport(report)}
-                        className="flex items-center gap-2 px-6 py-3 rounded-xl bg-gray-100 dark:bg-white/5 text-[10px] font-black uppercase tracking-widest hover:bg-[#E07A5F] hover:text-white transition-all"
-                      >
-                        <Eye className="w-4 h-4" /> Review
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                      <td className="p-8">
+                        <span className="font-mono text-sm font-black p-3 rounded-xl bg-blue-500/10 text-blue-500 border border-blue-500/20">
+                          {rToken}
+                        </span>
+                      </td>
+                      <td className="p-8">
+                        <div className="flex flex-col">
+                          <span className={`text-lg font-black ${activeColor}`}>{rCommission} ETB</span>
+                          <span className="text-[9px] font-bold text-gray-500 uppercase">15% of {rAmount} ETB</span>
+                        </div>
+                      </td>
+                      <td className="p-8">
+                        <div className={`flex items-center gap-2 text-[10px] font-black uppercase px-4 py-2 rounded-full w-fit ${
+                          rStatus === 'completed' ? 'bg-green-500/10 text-green-500' : 
+                          rStatus === 'verifying' ? 'bg-blue-500/10 text-blue-500' : 'bg-red-500/10 text-red-500'
+                        }`}>
+                          {rStatus === 'verifying' && <Clock className="w-3 h-3" />}
+                          {rStatus.replace('_', ' ')}
+                        </div>
+                      </td>
+                      <td className="p-8">
+                        <button 
+                          onClick={() => setSelectedReport({...report, status: rStatus, token: rToken, sellerName: rSeller, commission: rCommission, amount: rAmount})}
+                          className="flex items-center gap-2 px-6 py-3 rounded-xl bg-gray-100 dark:bg-white/5 text-[10px] font-black uppercase tracking-widest hover:bg-[#E07A5F] hover:text-white transition-all"
+                        >
+                          <Eye className="w-4 h-4" /> Review
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -356,9 +368,9 @@ export default function AdminDashboard({
                 <DollarSign className="w-16 h-16 text-gray-800 mb-4" />
                 <p className="text-[10px] font-black text-gray-600 uppercase tracking-widest leading-relaxed">
                   The Seller claims payment of <br/>
-                  <span className="text-white text-lg">{selectedReport.commission} ETB</span><br/>
+                  <span className="text-white text-lg">{selectedReport.commission || 0} ETB</span><br/>
                   Check your Telebirr history for Token:<br/>
-                  <span className="text-blue-500">{selectedReport.token}</span>
+                  <span className="text-blue-500">{selectedReport.token || 'N/A'}</span>
                 </p>
               </div>
             </div>
@@ -371,24 +383,24 @@ export default function AdminDashboard({
               
               <div className="mb-10">
                 <h3 className={`text-2xl font-black uppercase tracking-tight ${isDarkMode ? 'text-white' : 'text-black'}`}>Verify Sale</h3>
-                <p className="text-[10px] text-gray-500 font-black uppercase mt-2 tracking-widest">Artisan: {selectedReport.sellerName}</p>
+                <p className="text-[10px] text-gray-500 font-black uppercase mt-2 tracking-widest">Artisan: {selectedReport.sellerName || 'Anonymous'}</p>
               </div>
 
               <div className="space-y-6 flex-1">
                 <div className="flex justify-between items-center py-4 border-b dark:border-gray-800">
                   <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Total Sale</span>
-                  <span className={`text-xl font-black ${isDarkMode ? 'text-white' : 'text-black'}`}>{selectedReport.amount} ETB</span>
+                  <span className={`text-xl font-black ${isDarkMode ? 'text-white' : 'text-black'}`}>{selectedReport.amount || 0} ETB</span>
                 </div>
                 <div className="flex justify-between items-center py-4 border-b dark:border-gray-800">
                   <span className="text-[10px] font-black text-[#E07A5F] uppercase tracking-widest">Our Commission (15%)</span>
-                  <span className={`text-2xl font-black ${activeColor}`}>{selectedReport.commission} ETB</span>
+                  <span className={`text-2xl font-black ${activeColor}`}>{selectedReport.commission || 0} ETB</span>
                 </div>
                 <p className="text-[11px] text-gray-500 font-medium italic leading-relaxed">
                   Approval will mark the craft as "Sold" globally and award the artisan <span className="text-green-500 font-bold">+10 Trust Points</span>.
                 </p>
               </div>
 
-              {selectedReport.status === 'verifying' && (
+              {(selectedReport.status || 'verifying') === 'verifying' && (
                 <div className="grid grid-cols-2 gap-4 mt-10">
                   <button 
                     onClick={() => handleFlag(selectedReport)}
