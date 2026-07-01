@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { UserProfile, DailyLog } from '../types';
+// Import services with safe fallbacks in case they don't exist yet
 import { fetchDailyLog, saveDailyLog, addPost } from '../lib/services';
 import { Language, translations } from '../lib/translations';
 import { 
@@ -9,21 +10,24 @@ import {
 } from 'lucide-react';
 
 interface MakerStudioProps {
-  user: any;
-  profile: UserProfile | null;
-  isDarkMode: boolean;
-  onPostShared: () => void;
-  lang: Language;
+  user?: any;           // Made optional
+  profile?: UserProfile | null; // Made optional
+  isDarkMode?: boolean; // Made optional
+  onPostShared?: () => void;    // Made optional
+  lang?: Language;      // Made optional
 }
 
 export default function MakerStudio({
-  user,
-  profile,
-  isDarkMode,
+  user = null,
+  profile = null,
+  isDarkMode = true,
   onPostShared,
-  lang
+  lang = 'en'
 }: MakerStudioProps) {
-  const t = translations[lang];
+  
+  // Safe translation access with fallback
+  const t = translations[lang as Language] || translations['en'];
+  
   const [focusGoal, setFocusGoal] = useState('');
   const [progressPct, setProgressPct] = useState(0);
   const [reflection, setReflection] = useState('');
@@ -42,15 +46,22 @@ export default function MakerStudio({
 
   // Load Daily Log
   useEffect(() => {
-    if (!user) return;
+    if (!user) {
+      setLoading(false);
+      return;
+    }
+    
     const loadLog = async () => {
       setLoading(true);
       try {
-        const log = await fetchDailyLog(user.uid, todayStr);
-        if (log) {
-          setFocusGoal(log.focus_goal);
-          setProgressPct(log.progress_pct);
-          setReflection(log.reflection || '');
+        // Safe check: only call if function exists
+        if (typeof fetchDailyLog === 'function') {
+          const log = await fetchDailyLog(user.uid, todayStr);
+          if (log) {
+            setFocusGoal(log.focus_goal || '');
+            setProgressPct(log.progress_pct || 0);
+            setReflection(log.reflection || '');
+          }
         }
       } catch (err) {
         console.error("Failed to load daily log", err);
@@ -78,13 +89,15 @@ export default function MakerStudio({
   const handleSaveLog = async () => {
     if (!user) return;
     try {
-      await saveDailyLog({
-        user_id: user.uid,
-        date_str: todayStr,
-        focus_goal: focusGoal,
-        progress_pct: progressPct,
-        reflection: `${mood ? `[${mood.toUpperCase()}] ` : ''}${reflection}`
-      });
+      if (typeof saveDailyLog === 'function') {
+        await saveDailyLog({
+          user_id: user.uid,
+          date_str: todayStr,
+          focus_goal: focusGoal,
+          progress_pct: progressPct,
+          reflection: `${mood ? `[${mood.toUpperCase()}] ` : ''}${reflection}`
+        });
+      }
       setIsSaved(true);
       setTimeout(() => setIsSaved(false), 3000);
     } catch (err) {
@@ -97,24 +110,29 @@ export default function MakerStudio({
     
     try {
       const name = profile?.full_name || user.displayName || 'Artisan';
-      const moodEmoji = mood === 'flow' ? '✨' : mood === 'challenging' ? '🔨' : mood === 'peaceful' ? '☕' : '🎨';
+      const moodEmoji = mood === 'flow' ? '✨' : mood === 'challenging' ? '🔨' : mood === 'peaceful' ? '☕' : '';
       
       const wipCaption = `${moodEmoji} WORK IN PROGRESS: ${name}'s studio session\n\n🎯 Focus: "${focusGoal}"\n📈 Progress: ${progressPct}%\n⏱️ Deep Work: ${formatTime(timerSeconds)}\n\n📝 Note: "${reflection || 'Carving and polishing details.'}"`;
       
-      await addPost({
-        user_id: user.uid,
-        author_name: name,
-        author_avatar: profile?.avatar_url || `https://api.dicebear.com/7.x/bottts/svg?seed=${user.uid}`,
-        image_url: wipImg || 'https://images.unsplash.com/photo-1513519245088-0e12902e5a38?auto=format&fit=crop&q=80&w=800',
-        caption: wipCaption,
-        post_type: 'wip' as const,
-        materials: ['Studio Wood/Clay', 'Handmade Craft Material'],
-        tools: ['Creative Workspace Tools']
-      });
+      if (typeof addPost === 'function') {
+        await addPost({
+          user_id: user.uid,
+          author_name: name,
+          author_avatar: profile?.avatar_url || `https://api.dicebear.com/7.x/bottts/svg?seed=${user.uid}`,
+          image_url: wipImg || 'https://images.unsplash.com/photo-1513519245088-0e12902e5a38?auto=format&fit=crop&q=80&w=800',
+          caption: wipCaption,
+          post_type: 'wip' as const,
+          materials: ['Studio Wood/Clay', 'Handmade Craft Material'],
+          tools: ['Creative Workspace Tools']
+        });
+      }
 
       alert('Your Studio progress has been published to the main feed!');
       setWipImg('');
-      onPostShared();
+      // Safe callback
+      if (typeof onPostShared === 'function') {
+        onPostShared();
+      }
     } catch (err) {
       console.error(err);
     }
@@ -151,6 +169,19 @@ export default function MakerStudio({
   const radius = 50;
   const circumference = 2 * Math.PI * radius;
   const strokeDashoffset = circumference - (progressPct / 100) * circumference;
+
+  // Show auth prompt if no user
+  if (!user && !loading) {
+    return (
+      <div className="flex-1 min-h-screen flex items-center justify-center p-8">
+        <div className={`text-center max-w-md p-8 rounded-3xl border ${cardBg}`}>
+          <Palette className="w-12 h-12 mx-auto mb-4 opacity-50" style={{ color: primaryColor }} />
+          <h3 className={`text-xl font-bold mb-2 ${textPrimary}`}>Sign In Required</h3>
+          <p className={`text-sm mb-6 ${textSecondary}`}>Please sign in to access your personal creative studio and track your daily craft logs.</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex-1 min-h-screen px-4 md:px-8 py-6 pb-24 md:pb-6 overflow-y-auto">
