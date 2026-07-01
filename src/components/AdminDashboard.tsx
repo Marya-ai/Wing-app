@@ -1,32 +1,65 @@
 import React, { useState, useEffect } from 'react';
-import { Post } from '../types';
+import { Post, UserProfile } from '../types';
 // WING: Firebase & Service Imports
-import { db } from '../lib/firebase';
-import { collection, query, onSnapshot, orderBy } from 'firebase/firestore';
+import { db, auth } from '../lib/firebase';
+import { collection, query, onSnapshot, orderBy, getDocs } from 'firebase/firestore';
+import { signOut } from 'firebase/auth';
+// Safe imports with fallback checks
 import { verifySaleAction, flagSellerAction } from '../lib/wingServices';
 
 import { 
   ShieldCheck, AlertTriangle, CheckCircle, XCircle, 
-  Eye, DollarSign, Search, Clock, TrendingUp, Filter, Users
+  Eye, DollarSign, Search, Clock, TrendingUp, Filter, Users,
+  LogOut, Activity, Ban, RefreshCw
 } from 'lucide-react';
 
 interface AdminDashboardProps {
-  isDarkMode: boolean;
+  user?: any;           // Made optional
+  profile?: UserProfile | null; // Made optional
+  isDarkMode?: boolean; // Made optional
 }
 
-export default function AdminDashboard({ isDarkMode }: AdminDashboardProps) {
+export default function AdminDashboard({ 
+  user = null, 
+  profile = null, 
+  isDarkMode = true 
+}: AdminDashboardProps) {
+  
   // --- STATE ---
   const [reports, setReports] = useState<any[]>([]);
   const [selectedReport, setSelectedReport] = useState<any>(null);
   const [filter, setFilter] = useState<'verifying' | 'completed' | 'fraud_flagged'>('verifying');
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [isAuthorized, setIsAuthorized] = useState(false);
+  const [checkingAuth, setCheckingAuth] = useState(true);
+
+  // NEW: User Management State
+  const [users, setUsers] = useState<UserProfile[]>([]);
+  const [activeTab, setActiveTab] = useState<'reports' | 'users'>('reports');
 
   const activeBg = isDarkMode ? 'bg-[#D4AF37]' : 'bg-[#E07A5F]';
   const activeColor = isDarkMode ? 'text-[#D4AF37]' : 'text-[#E07A5F]';
+  const cardBg = isDarkMode ? 'bg-[#111] border-gray-800' : 'bg-white border-gray-200 shadow-sm';
+
+  // --- SECURITY CHECK ---
+  useEffect(() => {
+    if (!user || !profile) {
+      setIsAuthorized(false);
+      setCheckingAuth(false);
+      return;
+    }
+
+    // Check if user is admin via profile flag OR hardcoded email
+    const isAdmin = profile.is_admin === true || user.email === 'admin@wing.com';
+    setIsAuthorized(isAdmin);
+    setCheckingAuth(false);
+  }, [user, profile]);
 
   // --- WING: REAL-TIME DATA LISTENER ---
   useEffect(() => {
+    if (!isAuthorized) return;
+
     const q = query(collection(db, "reports"), orderBy("reportedAt", "desc"));
     
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -39,7 +72,23 @@ export default function AdminDashboard({ isDarkMode }: AdminDashboardProps) {
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [isAuthorized]);
+
+  // NEW: Load Users for Management Tab
+  useEffect(() => {
+    if (!isAuthorized || activeTab !== 'users') return;
+    
+    const loadUsers = async () => {
+      try {
+        const snap = await getDocs(collection(db, "profiles"));
+        const userList = snap.docs.map(d => ({ id: d.id, ...d.data() } as UserProfile));
+        setUsers(userList);
+      } catch (err) {
+        console.error("Failed to load users:", err);
+      }
+    };
+    loadUsers();
+  }, [isAuthorized, activeTab]);
 
   // --- LOGIC ---
   const filteredReports = reports.filter(r => {
@@ -57,6 +106,62 @@ export default function AdminDashboard({ isDarkMode }: AdminDashboardProps) {
     .filter(r => r.status === 'completed')
     .reduce((sum, r) => sum + (r.commission || 0), 0);
 
+  const handleVerify = async (report: any) => {
+    if (typeof verifySaleAction !== 'function') {
+      alert("Verification service is currently unavailable.");
+      return;
+    }
+    try {
+      await verifySaleAction(report.id, report.postId, report.sellerId);
+      setSelectedReport(null);
+    } catch (err) {
+      console.error(err);
+      alert("Failed to verify sale.");
+    }
+  };
+
+  const handleFlag = async (report: any) => {
+    if (typeof flagSellerAction !== 'function') {
+      alert("Fraud reporting service is currently unavailable.");
+      return;
+    }
+    if(window.confirm("Flag this seller for fraud? This will restrict their account.")) {
+      try {
+        await flagSellerAction(report.sellerId, report.id, report.postId);
+        setSelectedReport(null);
+      } catch (err) {
+        console.error(err);
+        alert("Failed to flag seller.");
+      }
+    }
+  };
+
+  const handleSignOut = async () => {
+    try { await signOut(auth); } catch (err) { console.error(err); }
+  };
+
+  // --- RENDER: AUTH GATE ---
+  if (checkingAuth) {
+    return (
+      <div className={`min-h-screen flex items-center justify-center ${isDarkMode ? 'bg-[#0A0A0A]' : 'bg-gray-50'}`}>
+        <RefreshCw className="w-8 h-8 animate-spin text-gray-500" />
+      </div>
+    );
+  }
+
+  if (!isAuthorized) {
+    return (
+      <div className={`min-h-screen flex flex-col items-center justify-center p-8 ${isDarkMode ? 'bg-[#0A0A0A]' : 'bg-gray-50'}`}>
+        <Ban className="w-16 h-16 text-red-500 mb-6 opacity-50" />
+        <h2 className={`text-2xl font-black uppercase tracking-tighter mb-2 ${isDarkMode ? 'text-white' : 'text-black'}`}>Access Denied</h2>
+        <p className="text-xs text-gray-500 uppercase tracking-widest mb-8">You do not have administrator privileges.</p>
+        <button onClick={handleSignOut} className="px-6 py-3 rounded-xl bg-red-500/10 text-red-500 text-xs font-black uppercase hover:bg-red-500 hover:text-white transition-all">
+          Sign Out
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className={`min-h-screen p-6 md:p-10 ${isDarkMode ? 'bg-[#0A0A0A]' : 'bg-gray-50'}`}>
       
@@ -70,106 +175,176 @@ export default function AdminDashboard({ isDarkMode }: AdminDashboardProps) {
         </div>
 
         <div className="flex flex-wrap gap-4 w-full lg:w-auto">
-          <div className={`flex-1 lg:flex-none p-6 px-10 rounded-[2rem] border ${isDarkMode ? 'bg-[#111] border-gray-800' : 'bg-white border-gray-200 shadow-sm'}`}>
+          <div className={`flex-1 lg:flex-none p-6 px-10 rounded-[2rem] border ${cardBg}`}>
             <p className="text-[9px] font-black text-gray-400 uppercase mb-2 tracking-widest">Collected Revenue</p>
             <p className={`text-2xl font-black ${isDarkMode ? 'text-white' : 'text-black'}`}>{totalCollected.toLocaleString()} <span className="text-green-500 text-xs font-bold uppercase ml-1">ETB</span></p>
           </div>
-          <div className={`flex-1 lg:flex-none p-6 px-10 rounded-[2rem] border ${isDarkMode ? 'bg-[#111] border-gray-800' : 'bg-white border-gray-200 shadow-sm'}`}>
+          <div className={`flex-1 lg:flex-none p-6 px-10 rounded-[2rem] border ${cardBg}`}>
             <p className="text-[9px] font-black text-[#E07A5F] uppercase mb-2 tracking-widest">Pending Verification</p>
             <p className={`text-2xl font-black ${isDarkMode ? 'text-white' : 'text-black'}`}>{pendingRevenue.toLocaleString()} <span className="text-xs font-bold uppercase ml-1">ETB</span></p>
           </div>
         </div>
       </header>
 
-      {/* 2. CONTROL BAR (FILTERS & SEARCH) */}
+      {/* 2. TAB SWITCHER & CONTROL BAR */}
       <div className="flex flex-col md:flex-row items-center gap-6 mb-10">
         <div className="flex bg-gray-200 dark:bg-white/5 p-1.5 rounded-[1.5rem] w-full md:w-auto">
-          {(['verifying', 'completed', 'fraud_flagged'] as const).map((type) => (
-            <button 
-              key={type}
-              onClick={() => setFilter(type)} 
-              className={`flex-1 md:flex-none px-6 py-3 rounded-xl text-[10px] font-black uppercase transition-all tracking-widest ${filter === type ? activeBg + ' text-white shadow-lg' : 'text-gray-500 hover:text-gray-400'}`}
-            >
-              {type.replace('_', ' ')}
-            </button>
-          ))}
+          <button 
+            onClick={() => setActiveTab('reports')}
+            className={`flex-1 md:flex-none px-6 py-3 rounded-xl text-[10px] font-black uppercase transition-all tracking-widest flex items-center gap-2 ${activeTab === 'reports' ? activeBg + ' text-white shadow-lg' : 'text-gray-500 hover:text-gray-400'}`}
+          >
+            <DollarSign className="w-3 h-3" /> Reports
+          </button>
+          <button 
+            onClick={() => setActiveTab('users')}
+            className={`flex-1 md:flex-none px-6 py-3 rounded-xl text-[10px] font-black uppercase transition-all tracking-widest flex items-center gap-2 ${activeTab === 'users' ? activeBg + ' text-white shadow-lg' : 'text-gray-500 hover:text-gray-400'}`}
+          >
+            <Users className="w-3 h-3" /> Artisans
+          </button>
         </div>
-        <div className="relative flex-1 max-w-md w-full">
-          <Search className="absolute left-5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
-          <input 
-            type="text" 
-            placeholder="Search Token or Artisan..." 
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className={`w-full pl-14 pr-6 py-4 rounded-2xl text-xs font-bold outline-none border transition-all ${isDarkMode ? 'bg-[#111] border-gray-800 text-white focus:border-[#D4AF37]' : 'bg-white border-gray-200 focus:border-[#E07A5F]'}`} 
-          />
-        </div>
-      </div>
 
-      {/* 3. REPORTS TABLE */}
-      <div className={`rounded-[3rem] border overflow-hidden shadow-2xl ${isDarkMode ? 'bg-[#111] border-gray-800' : 'bg-white border-gray-200'}`}>
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className={`border-b ${isDarkMode ? 'border-gray-800 bg-white/5' : 'border-gray-100 bg-gray-50'}`}>
-                <th className="p-8 text-[10px] font-black uppercase text-gray-400 tracking-widest">Artisan</th>
-                <th className="p-8 text-[10px] font-black uppercase text-gray-400 tracking-widest">Sale Token</th>
-                <th className="p-8 text-[10px] font-black uppercase text-gray-400 tracking-widest">Commission Due</th>
-                <th className="p-8 text-[10px] font-black uppercase text-gray-400 tracking-widest">Status</th>
-                <th className="p-8 text-[10px] font-black uppercase text-gray-400 tracking-widest">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y dark:divide-gray-800">
-              {loading ? (
-                <tr><td colSpan={5} className="p-20 text-center text-xs font-black uppercase opacity-30">Loading Cloud Data...</td></tr>
-              ) : filteredReports.length === 0 ? (
-                <tr><td colSpan={5} className="p-20 text-center text-xs font-black uppercase opacity-30">No {filter} reports found</td></tr>
-              ) : filteredReports.map((report) => (
-                <tr key={report.id} className="hover:bg-white/5 transition-colors">
-                  <td className="p-8">
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-gray-700 to-gray-500 flex items-center justify-center text-[10px] text-white font-bold">
-                        {report.sellerName?.charAt(0) || 'U'}
-                      </div>
-                      <span className={`text-xs font-black ${isDarkMode ? 'text-white' : 'text-black'}`}>{report.sellerName || 'Anonymous'}</span>
-                    </div>
-                  </td>
-                  <td className="p-8">
-                    <span className="font-mono text-sm font-black p-3 rounded-xl bg-blue-500/10 text-blue-500 border border-blue-500/20">
-                      {report.token}
-                    </span>
-                  </td>
-                  <td className="p-8">
-                    <div className="flex flex-col">
-                      <span className={`text-lg font-black ${activeColor}`}>{report.commission} ETB</span>
-                      <span className="text-[9px] font-bold text-gray-500 uppercase">15% of {report.amount} ETB</span>
-                    </div>
-                  </td>
-                  <td className="p-8">
-                    <div className={`flex items-center gap-2 text-[10px] font-black uppercase px-4 py-2 rounded-full w-fit ${
-                      report.status === 'completed' ? 'bg-green-500/10 text-green-500' : 
-                      report.status === 'verifying' ? 'bg-blue-500/10 text-blue-500' : 'bg-red-500/10 text-red-500'
-                    }`}>
-                      {report.status === 'verifying' && <Clock className="w-3 h-3" />}
-                      {report.status.replace('_', ' ')}
-                    </div>
-                  </td>
-                  <td className="p-8">
-                    <button 
-                      onClick={() => setSelectedReport(report)}
-                      className="flex items-center gap-2 px-6 py-3 rounded-xl bg-gray-100 dark:bg-white/5 text-[10px] font-black uppercase tracking-widest hover:bg-[#E07A5F] hover:text-white transition-all"
-                    >
-                      <Eye className="w-4 h-4" /> Review
-                    </button>
-                  </td>
-                </tr>
+        {activeTab === 'reports' && (
+          <>
+            <div className="flex bg-gray-200 dark:bg-white/5 p-1.5 rounded-[1.5rem] w-full md:w-auto">
+              {(['verifying', 'completed', 'fraud_flagged'] as const).map((type) => (
+                <button 
+                  key={type}
+                  onClick={() => setFilter(type)} 
+                  className={`flex-1 md:flex-none px-6 py-3 rounded-xl text-[10px] font-black uppercase transition-all tracking-widest ${filter === type ? activeBg + ' text-white shadow-lg' : 'text-gray-500 hover:text-gray-400'}`}
+                >
+                  {type.replace('_', ' ')}
+                </button>
               ))}
-            </tbody>
-          </table>
-        </div>
+            </div>
+            <div className="relative flex-1 max-w-md w-full">
+              <Search className="absolute left-5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
+              <input 
+                type="text" 
+                placeholder="Search Token or Artisan..." 
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className={`w-full pl-14 pr-6 py-4 rounded-2xl text-xs font-bold outline-none border transition-all ${isDarkMode ? 'bg-[#111] border-gray-800 text-white focus:border-[#D4AF37]' : 'bg-white border-gray-200 focus:border-[#E07A5F]'}`} 
+              />
+            </div>
+          </>
+        )}
       </div>
 
-      {/* 4. VERIFICATION MODAL (INTEGRATED UI) */}
+      {/* 3. CONTENT AREA */}
+      {activeTab === 'reports' ? (
+        <div className={`rounded-[3rem] border overflow-hidden shadow-2xl ${isDarkMode ? 'bg-[#111] border-gray-800' : 'bg-white border-gray-200'}`}>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className={`border-b ${isDarkMode ? 'border-gray-800 bg-white/5' : 'border-gray-100 bg-gray-50'}`}>
+                  <th className="p-8 text-[10px] font-black uppercase text-gray-400 tracking-widest">Artisan</th>
+                  <th className="p-8 text-[10px] font-black uppercase text-gray-400 tracking-widest">Sale Token</th>
+                  <th className="p-8 text-[10px] font-black uppercase text-gray-400 tracking-widest">Commission Due</th>
+                  <th className="p-8 text-[10px] font-black uppercase text-gray-400 tracking-widest">Status</th>
+                  <th className="p-8 text-[10px] font-black uppercase text-gray-400 tracking-widest">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y dark:divide-gray-800">
+                {loading ? (
+                  <tr><td colSpan={5} className="p-20 text-center text-xs font-black uppercase opacity-30">Loading Cloud Data...</td></tr>
+                ) : filteredReports.length === 0 ? (
+                  <tr><td colSpan={5} className="p-20 text-center text-xs font-black uppercase opacity-30">No {filter} reports found</td></tr>
+                ) : filteredReports.map((report) => (
+                  <tr key={report.id} className="hover:bg-white/5 transition-colors">
+                    <td className="p-8">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-gray-700 to-gray-500 flex items-center justify-center text-[10px] text-white font-bold">
+                          {report.sellerName?.charAt(0) || 'U'}
+                        </div>
+                        <span className={`text-xs font-black ${isDarkMode ? 'text-white' : 'text-black'}`}>{report.sellerName || 'Anonymous'}</span>
+                      </div>
+                    </td>
+                    <td className="p-8">
+                      <span className="font-mono text-sm font-black p-3 rounded-xl bg-blue-500/10 text-blue-500 border border-blue-500/20">
+                        {report.token}
+                      </span>
+                    </td>
+                    <td className="p-8">
+                      <div className="flex flex-col">
+                        <span className={`text-lg font-black ${activeColor}`}>{report.commission} ETB</span>
+                        <span className="text-[9px] font-bold text-gray-500 uppercase">15% of {report.amount} ETB</span>
+                      </div>
+                    </td>
+                    <td className="p-8">
+                      <div className={`flex items-center gap-2 text-[10px] font-black uppercase px-4 py-2 rounded-full w-fit ${
+                        report.status === 'completed' ? 'bg-green-500/10 text-green-500' : 
+                        report.status === 'verifying' ? 'bg-blue-500/10 text-blue-500' : 'bg-red-500/10 text-red-500'
+                      }`}>
+                        {report.status === 'verifying' && <Clock className="w-3 h-3" />}
+                        {report.status.replace('_', ' ')}
+                      </div>
+                    </td>
+                    <td className="p-8">
+                      <button 
+                        onClick={() => setSelectedReport(report)}
+                        className="flex items-center gap-2 px-6 py-3 rounded-xl bg-gray-100 dark:bg-white/5 text-[10px] font-black uppercase tracking-widest hover:bg-[#E07A5F] hover:text-white transition-all"
+                      >
+                        <Eye className="w-4 h-4" /> Review
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : (
+        /* NEW: USER MANAGEMENT TABLE */
+        <div className={`rounded-[3rem] border overflow-hidden shadow-2xl ${isDarkMode ? 'bg-[#111] border-gray-800' : 'bg-white border-gray-200'}`}>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className={`border-b ${isDarkMode ? 'border-gray-800 bg-white/5' : 'border-gray-100 bg-gray-50'}`}>
+                  <th className="p-8 text-[10px] font-black uppercase text-gray-400 tracking-widest">Artisan</th>
+                  <th className="p-8 text-[10px] font-black uppercase text-gray-400 tracking-widest">Trust Score</th>
+                  <th className="p-8 text-[10px] font-black uppercase text-gray-400 tracking-widest">Commission Rate</th>
+                  <th className="p-8 text-[10px] font-black uppercase text-gray-400 tracking-widest">Joined</th>
+                  <th className="p-8 text-[10px] font-black uppercase text-gray-400 tracking-widest">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y dark:divide-gray-800">
+                {users.length === 0 ? (
+                  <tr><td colSpan={5} className="p-20 text-center text-xs font-black uppercase opacity-30">Loading Artisans...</td></tr>
+                ) : users.map((u) => (
+                  <tr key={u.id} className="hover:bg-white/5 transition-colors">
+                    <td className="p-8">
+                      <div className="flex items-center gap-3">
+                        <img src={u.avatar_url || `https://api.dicebear.com/7.x/bottts/svg?seed=${u.id}`} className="w-8 h-8 rounded-full" alt="" />
+                        <span className={`text-xs font-black ${isDarkMode ? 'text-white' : 'text-black'}`}>{u.full_name || 'Unknown'}</span>
+                      </div>
+                    </td>
+                    <td className="p-8">
+                      <span className={`text-sm font-black ${u.trust_score >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                        {u.trust_score || 0}
+                      </span>
+                    </td>
+                    <td className="p-8">
+                      <span className={`text-sm font-black ${activeColor}`}>{u.commission_rate || 15}%</span>
+                    </td>
+                    <td className="p-8">
+                      <span className="text-xs text-gray-500 font-mono">{u.artisan_since ? new Date(u.artisan_since).toLocaleDateString() : 'N/A'}</span>
+                    </td>
+                    <td className="p-8">
+                      <div className={`text-[10px] font-black uppercase px-3 py-1.5 rounded-full w-fit ${
+                        u.trust_score >= 0 ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-500'
+                      }`}>
+                        {u.trust_score >= 0 ? 'Active' : 'Restricted'}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* 4. VERIFICATION MODAL */}
       {selectedReport && (
         <div className="fixed inset-0 z-[7000] flex items-center justify-center p-4 bg-black/90 backdrop-blur-2xl">
           <div className={`w-full max-w-3xl rounded-[4rem] overflow-hidden border shadow-2xl flex flex-col md:flex-row animate-in zoom-in duration-300 ${isDarkMode ? 'bg-[#0F0F0F] border-gray-800' : 'bg-white border-gray-100'}`}>
@@ -216,12 +391,7 @@ export default function AdminDashboard({ isDarkMode }: AdminDashboardProps) {
               {selectedReport.status === 'verifying' && (
                 <div className="grid grid-cols-2 gap-4 mt-10">
                   <button 
-                    onClick={async () => {
-                      if(window.confirm("Flag this seller for fraud?")) {
-                        await flagSellerAction(selectedReport.sellerId, selectedReport.id, selectedReport.postId);
-                        setSelectedReport(null);
-                      }
-                    }}
+                    onClick={() => handleFlag(selectedReport)}
                     className="flex flex-col items-center gap-2 p-5 rounded-3xl bg-red-500/10 border border-red-500/20 text-red-500 hover:bg-red-500 hover:text-white transition-all group"
                   >
                     <AlertTriangle className="w-6 h-6 group-hover:scale-110 transition-transform" />
@@ -229,10 +399,7 @@ export default function AdminDashboard({ isDarkMode }: AdminDashboardProps) {
                   </button>
 
                   <button 
-                    onClick={async () => {
-                      await verifySaleAction(selectedReport.id, selectedReport.postId, selectedReport.sellerId);
-                      setSelectedReport(null);
-                    }}
+                    onClick={() => handleVerify(selectedReport)}
                     className="flex flex-col items-center gap-2 p-5 rounded-3xl bg-green-500/10 border border-green-500/20 text-green-500 hover:bg-green-500 hover:text-white transition-all group"
                   >
                     <CheckCircle className="w-6 h-6 group-hover:scale-110 transition-transform" />
