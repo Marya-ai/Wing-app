@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Sparkles, Send, Bot, User, ArrowRight, Lightbulb, TrendingUp, Cpu, Flame } from 'lucide-react';
-
+import { Sparkles, Send, Bot, User, ArrowRight } from 'lucide-react';
 import { Language, translations } from '../lib/translations';
 
 interface Message {
@@ -9,20 +8,27 @@ interface Message {
 }
 
 interface AIMentorProps {
-  isDarkMode: boolean;
-  lang: Language;
+  isDarkMode?: boolean; // Made optional with default
+  lang?: Language;      // Made optional with default
 }
 
-export default function AIMentor({ isDarkMode, lang }: AIMentorProps) {
-  const t = translations[lang];
+export default function AIMentor({ 
+  isDarkMode = true,    // Default to dark mode
+  lang = 'en'           // Default to English if not provided
+}: AIMentorProps) {
+  
+  // Safe translation access with fallback
+  const t = translations[lang as Language] || translations['en'];
+  
   const [messages, setMessages] = useState<Message[]>(() => [
     {
       role: 'assistant',
       content: lang === 'am'
-        ? "ሰላም ሠሪው! እኔ ዊንግ ረዳት ነኝ፣ የእደ-ጥበብ እና የስቱዲዮ ስትራቴጂ መካሪዎ። የሸክላ ሥራዎችን ዋጋ ማውጣት፣ ክር ማገጣጠም ወይም አዲስ ሀሳብ መፈለግ ከፈለጉ እኔን መጠየቅ ይችላሉ።\n\nዛሬ ምን እየሰሩ ነው?"
+        ? "ላም ሠሪው! እኔ ዊንግ ረዳት ነኝ፣ የእደ-ጥበብ እና የስቱዲዮ ስትራቴጂ መካሪዎ። የሸክ ሥራዎችን ጋ ማውጣት፣ ክር ማገጣጠም ወይም አዲስ ሀሳብ መለግ ከፈለጉ እኔን መጠየቅ ይችላሉ\n\nዛሬ ምን እየሰሩ ነው?"
         : "Greetings, maker! I am Wing Guide, your traditional crafts and studio strategy mentor. Whether you are troubleshooting cracked glazes, pricing hand-woven scarves, or finding inspiration for recycled materials, I am here to offer encouraging and practical wisdom.\n\nWhat are you crafting today?"
     }
   ]);
+  
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -49,11 +55,17 @@ export default function AIMentor({ isDarkMode, lang }: AIMentorProps) {
     setLoading(true);
 
     try {
+      // Try to call the API, but handle missing endpoint gracefully
       const response = await fetch('/api/mentor', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ messages: newMessages })
       });
+      
+      if (!response.ok) {
+        throw new Error(`API returned ${response.status}`);
+      }
+      
       const data = await response.json();
       
       if (data.error) {
@@ -62,10 +74,17 @@ export default function AIMentor({ isDarkMode, lang }: AIMentorProps) {
 
       setMessages(prev => [...prev, { role: 'assistant' as const, content: data.text }]);
     } catch (err: any) {
-      console.error(err);
+      console.error("AI Mentor API error:", err);
+      
+      // Fallback response when API is unavailable (development/offline)
+      const fallbackResponses: Record<string, string> = {
+        'en': "I'm currently in offline mode while my cloud connection is being configured. In production, I'll provide expert advice on pricing, techniques, and marketing. For now, try asking about material combinations or design inspiration!",
+        'am': "የኔ የደመና ግንኙነት እየተዘጋጀ ስለነ አሁን በመስመር ላይ አይደለሁም። በማምረት ጊዜ ለ ዋጋ፣ ክኒኮች እና በያ ምክር እሰጣለሁ። አሁን ስለ ቁቁስ ጥምረት ወይም ዲዛይን ሀሳብ ጠይቁ!"
+      };
+      
       setMessages(prev => [...prev, { 
         role: 'assistant' as const, 
-        content: "I apologize, my studio connection had a small hiccup. Please try asking again. Tell me: what materials are you working with?" 
+        content: fallbackResponses[lang as Language] || fallbackResponses['en']
       }]);
     } finally {
       setLoading(false);
@@ -74,21 +93,20 @@ export default function AIMentor({ isDarkMode, lang }: AIMentorProps) {
 
   const activeColor = isDarkMode ? 'text-[#D4AF37]' : 'text-[#E07A5F]';
   const activeBg = isDarkMode ? 'bg-[#D4AF37] text-black hover:bg-opacity-90' : 'bg-[#E07A5F] text-white hover:bg-opacity-90';
-  const activeBorder = isDarkMode ? 'border-[#D4AF37]' : 'border-[#E07A5F]';
 
   return (
     <div className="flex-1 min-h-screen flex flex-col px-4 md:px-8 py-6 pb-24 md:pb-6 max-h-screen">
       
       {/* Mentor Header */}
-      <div className="pb-4 border-b transition-colors duration-200 border-opacity-10 mb-4 flex items-center justify-between shrink-0">
+      <div className="pb-4 border-b transition-colors duration-200 border-opacity-10 mb-4 flex items-center justify-between shrink-0 border-gray-200 dark:border-gray-800">
         <div>
-          <h2 className="text-2xl font-sans font-bold tracking-tight mb-1 flex items-center gap-2">
+          <h2 className={`text-2xl font-sans font-bold tracking-tight mb-1 flex items-center gap-2 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
             <Sparkles className={`w-6 h-6 ${activeColor} animate-pulse`} /> Wing Guide Mentor
           </h2>
           <p className="text-xs text-gray-400">Wise and practical strategy counsel for traditional artisans and crafters.</p>
         </div>
         <div className={`text-xs px-3 py-1.5 rounded-full border hidden sm:flex items-center gap-1.5 font-mono ${
-          isDarkMode ? 'bg-[#1E1E1E] border-[#2D2D2D]' : 'bg-[#FAF7F0] border-[#EBE7DF]'
+          isDarkMode ? 'bg-[#1E1E1E] border-[#2D2D2D] text-gray-300' : 'bg-[#FAF7F0] border-[#EBE7DF] text-gray-600'
         }`}>
           <div className="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse" />
           <span>Wing-Guide AI Online</span>
@@ -185,8 +203,8 @@ export default function AIMentor({ isDarkMode, lang }: AIMentorProps) {
             disabled={loading}
             className={`flex-1 px-5 py-3 rounded-2xl border text-sm outline-none transition-all ${
               isDarkMode 
-                ? 'bg-[#1C1C1C] border-[#2D2D2D] focus:border-[#D4AF37] text-white' 
-                : 'bg-[#FAF7F0] border-[#EBE7DF] focus:border-[#E07A5F] text-black'
+                ? 'bg-[#1C1C1C] border-[#2D2D2D] focus:border-[#D4AF37] text-white placeholder:text-gray-500' 
+                : 'bg-[#FAF7F0] border-[#EBE7DF] focus:border-[#E07A5F] text-black placeholder:text-gray-400'
             } disabled:opacity-50`}
           />
           <button
