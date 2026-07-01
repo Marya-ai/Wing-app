@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, ErrorInfo, ReactNode } from 'react';
 import { Post, UserProfile } from './types';
 // WING: Firebase & Global Logic
 import { auth, db } from './lib/firebase';
@@ -8,20 +8,46 @@ import { doc, onSnapshot } from 'firebase/firestore';
 // --- COMPONENT IMPORTS ---
 import SocialFeed from './components/SocialFeed';
 import PostDetailView from './components/PostDetailView';
+import AuthModal from './components/AuthModal';
 import SellerDashboard from './components/SellerDashboard';
 import AdminDashboard from './components/AdminDashboard';
 import CommunityChat from './components/CommunityChat'; 
 import Notifications from './components/Notifications';
 import AIMentor from './components/AIMentor'; 
 import MakerStudio from './components/MakerStudio'; 
-import AuthModal from './components/AuthModal';
 import Settings from './components/Settings'; 
 
 import { 
   Compass, LayoutDashboard, ShieldAlert, Moon, Sun, LogOut, 
   Bell, MessageSquare, Brain, User, Settings as SettingsIcon, Image as ImageIcon,
-  ChevronRight, Menu, X, Globe, Sparkles
+  ChevronRight, Menu, X, Globe, Sparkles, AlertTriangle
 } from 'lucide-react';
+
+// --- ERROR BOUNDARY TO PREVENT WHITE SCREENS ---
+class ErrorBoundary extends React.Component<{children: ReactNode}, {hasError: boolean}> {
+  constructor(props: any) {
+    super(props);
+    this.state = { hasError: false };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true };
+  }
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error("Component crashed:", error, errorInfo);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="h-[60vh] flex flex-col items-center justify-center text-center p-8 text-red-500">
+          <AlertTriangle size={48} className="mb-4" />
+          <h3 className="text-xl font-black uppercase">Component Error</h3>
+          <p className="text-xs mt-2 opacity-70">Check console for details.</p>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 export default function WingApp() {
   // --- AUTH & PROFILE STATE ---
@@ -33,10 +59,7 @@ export default function WingApp() {
   const [view, setView] = useState<string>('feed'); 
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  
-  // Language State - Now properly typed and connected
   const [lang, setLang] = useState<'en' | 'am'>('en'); 
-  
   const [selectedPost, setSelectedPost] = useState<Post | null>(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [activeSearchQuery, setActiveSearchQuery] = useState('');
@@ -71,10 +94,48 @@ export default function WingApp() {
     );
   }
 
+  // Safe rendering function with Error Boundary
+  const renderContent = () => {
+    const commonProps = { user, isDarkMode };
+    
+    switch(view) {
+      case 'feed':
+        return (
+          <SocialFeed 
+            user={user} 
+            profile={profile} 
+            onSelectPost={setSelectedPost} 
+            isDarkMode={isDarkMode} 
+            activeSearchQuery={activeSearchQuery} 
+            setActiveSearchQuery={setActiveSearchQuery} 
+            onOpenAuth={() => setShowAuthModal(true)}
+            currentLang={lang}
+            setCurrentLang={setLang}
+          />
+        );
+      case 'seller':
+        return user ? <SellerDashboard {...commonProps} profile={profile} /> : <AuthRequired onAuth={() => setShowAuthModal(true)} />;
+      case 'admin':
+        return isAdmin ? <AdminDashboard isDarkMode={isDarkMode} /> : <AccessDenied />;
+      case 'notifications':
+        return <Notifications {...commonProps} />;
+      case 'chat':
+        return <CommunityChat {...commonProps} />;
+      case 'mentor':
+        return <AIMentor {...commonProps} />;
+      case 'studio':
+        return <MakerStudio {...commonProps} />;
+      case 'settings':
+        return <Settings {...commonProps} profile={profile} />;
+      default:
+        return <ComingSoon title={view} />;
+    }
+  };
+
   return (
     <div className={`flex h-screen overflow-hidden ${isDarkMode ? 'bg-[#0A0A0A] text-white' : 'bg-[#FAF9F6] text-black'}`}>
       
-      {/* --- 1. RESPONSIVE SIDEBAR --- */}
+      {/* --- SIDEBAR --- */}
       <aside className={`
         fixed inset-y-0 left-0 z-[5000] w-72 transform transition-transform duration-300 ease-in-out border-r flex flex-col
         ${isMenuOpen ? 'translate-x-0' : '-translate-x-full'}
@@ -82,17 +143,9 @@ export default function WingApp() {
         ${isDarkMode ? 'bg-[#0F0F0F] border-gray-800' : 'bg-white border-gray-100'}
       `}>
         
-        {/* LOGO AREA - UPDATED TO USE PUBLIC FOLDER IMAGE */}
         <div className="p-10 flex items-center justify-between">
           <div className="flex items-center gap-3">
-             <div className="relative">
-                {/* Points to /wing-logo.png in your public folder */}
-                <img 
-                  src="/wing-logo.png" 
-                  alt="Wing Logo" 
-                  className="w-10 h-10 object-contain drop-shadow-lg rotate-3 hover:rotate-0 transition-transform duration-500" 
-                />
-             </div>
+             <img src="/wing-logo.png" alt="Wing Logo" className="w-10 h-10 object-contain drop-shadow-lg rotate-3 hover:rotate-0 transition-transform duration-500" />
              <div>
                <h1 className="text-2xl font-black uppercase tracking-tighter text-[#E07A5F]">Wing</h1>
                <p className="text-[8px] font-black uppercase tracking-[0.3em] opacity-30">Artisan Alliance</p>
@@ -121,14 +174,10 @@ export default function WingApp() {
           )}
         </nav>
 
-        {/* PROFILE & LANGUAGE FOOTER */}
         <div className="p-8 border-t dark:border-gray-800">
-           {/* Language Toggle - NOW CONNECTED TO GLOBAL STATE */}
            <button 
              onClick={() => setLang(lang === 'en' ? 'am' : 'en')}
-             className={`w-full mb-6 flex items-center justify-center gap-2 py-2 rounded-xl border transition-all ${
-               isDarkMode ? 'bg-white/5 border-gray-800 hover:bg-white/10' : 'bg-gray-100 border-gray-200 hover:bg-gray-200'
-             }`}
+             className={`w-full mb-6 flex items-center justify-center gap-2 py-2 rounded-xl border transition-all ${isDarkMode ? 'bg-white/5 border-gray-800 hover:bg-white/10' : 'bg-gray-100 border-gray-200 hover:bg-gray-200'}`}
            >
              <Globe size={12} /> {lang === 'en' ? 'English' : 'አማርኛ'}
            </button>
@@ -158,10 +207,8 @@ export default function WingApp() {
         </div>
       </aside>
 
-      {/* --- 2. MAIN CONTENT AREA --- */}
+      {/* --- MAIN CONTENT --- */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        
-        {/* MOBILE HEADER */}
         <header className="lg:hidden flex items-center justify-between p-5 border-b dark:border-gray-800 bg-transparent">
            <button onClick={toggleMenu} className="p-2 rounded-xl bg-gray-100 dark:bg-white/5"><Menu size={20} /></button>
            <div className="flex items-center gap-2">
@@ -173,39 +220,14 @@ export default function WingApp() {
 
         <main className="flex-1 overflow-y-auto relative">
           <div className="container mx-auto p-4">
-            {/* FIXED: All views now pass required props to prevent blank screens */}
-            {view === 'feed' && (
-              <SocialFeed 
-                user={user} 
-                profile={profile} 
-                onSelectPost={setSelectedPost} 
-                isDarkMode={isDarkMode} 
-                activeSearchQuery={activeSearchQuery} 
-                setActiveSearchQuery={setActiveSearchQuery} 
-                onOpenAuth={() => setShowAuthModal(true)}
-                currentLang={lang}
-                setCurrentLang={setLang}
-              />
-            )}
-            
-            {view === 'seller' && (
-              user ? <SellerDashboard user={user} isDarkMode={isDarkMode} /> : <AuthRequired onAuth={() => setShowAuthModal(true)} />
-            )}
-            
-            {view === 'admin' && (
-              isAdmin ? <AdminDashboard isDarkMode={isDarkMode} /> : <div className="p-20 text-center opacity-30 uppercase font-black tracking-widest text-xs">Access Restricted</div>
-            )}
-
-            {view === 'notifications' && <Notifications user={user} isDarkMode={isDarkMode} />}
-            {view === 'chat' && <CommunityChat user={user} isDarkMode={isDarkMode} />}
-            {view === 'mentor' && <AIMentor user={user} isDarkMode={isDarkMode} />}
-            {view === 'studio' && <MakerStudio user={user} isDarkMode={isDarkMode} />}
-            {view === 'settings' && <Settings user={user} profile={profile} isDarkMode={isDarkMode} />}
+            <ErrorBoundary>
+              {renderContent()}
+            </ErrorBoundary>
           </div>
         </main>
       </div>
 
-      {/* --- 3. GLOBAL MODALS --- */}
+      {/* --- MODALS --- */}
       {selectedPost && (
         <PostDetailView 
           post={selectedPost} 
@@ -222,7 +244,8 @@ export default function WingApp() {
   );
 }
 
-// Sidebar Link Component
+// --- HELPER COMPONENTS ---
+
 function SidebarLink({ icon, label, active, onClick, color }: any) {
   return (
     <button 
@@ -244,14 +267,32 @@ function SidebarLink({ icon, label, active, onClick, color }: any) {
   );
 }
 
-// Placeholder for Auth Requirement
 function AuthRequired({ onAuth }: { onAuth: () => void }) {
   return (
     <div className="h-[60vh] flex flex-col items-center justify-center text-center p-12">
       <User className="w-16 h-16 text-gray-400 mb-6 opacity-20" />
       <h3 className="text-xl font-black uppercase tracking-widest mb-4">Identity Required</h3>
-      <p className="text-xs text-gray-500 max-w-xs mb-8 uppercase font-bold leading-relaxed">Please sign in to your artisan account to access this feature.</p>
+      <p className="text-xs text-gray-500 max-w-xs mb-8 uppercase font-bold leading-relaxed">Please sign in to access this feature.</p>
       <button onClick={onAuth} className="px-10 py-4 bg-[#E07A5F] text-white rounded-full font-black text-xs uppercase tracking-widest shadow-xl">Sign In Now</button>
+    </div>
+  );
+}
+
+function AccessDenied() {
+  return (
+    <div className="h-[60vh] flex flex-col items-center justify-center text-center p-12 opacity-50">
+      <ShieldAlert className="w-16 h-16 mb-6" />
+      <h3 className="text-xl font-black uppercase tracking-widest">Access Restricted</h3>
+    </div>
+  );
+}
+
+function ComingSoon({ title }: { title: string }) {
+  return (
+    <div className="h-[60vh] flex flex-col items-center justify-center text-center p-12">
+      <Sparkles className="w-16 h-16 text-[#E07A5F] mb-6 animate-pulse" />
+      <h3 className="text-2xl font-black uppercase tracking-widest mb-2">{title}</h3>
+      <p className="text-xs text-gray-500 uppercase font-bold tracking-widest">Coming Soon to Wing Platform</p>
     </div>
   );
 }
