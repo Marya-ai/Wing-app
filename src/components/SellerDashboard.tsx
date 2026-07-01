@@ -3,6 +3,7 @@ import { Post, UserProfile } from '../types';
 // WING: Firebase & Service Imports
 import { db } from '../lib/firebase';
 import { collection, query, where, onSnapshot, doc } from 'firebase/firestore';
+// Safe import with fallback check
 import { reportSaleAction } from '../lib/wingServices';
 
 import { 
@@ -12,8 +13,9 @@ import {
 import ReputationBadge from './ReputationBadge';
 
 interface SellerDashboardProps {
-  user: any; // Firebase Auth User
-  isDarkMode: boolean;
+  user?: any;           // Made optional
+  profile?: UserProfile | null; // Made optional (we'll fetch if not provided)
+  isDarkMode?: boolean; // Made optional
 }
 
 // WING: Replace this with your personal Telegram link or Bot link
@@ -21,9 +23,14 @@ const SUPPORT_LINK = "https://t.me/@mari_beeee";
 // WING: Replace this with your actual Telebirr number
 const TELEBIRR_NUMBER = "09XXXXXXXX"; 
 
-export default function SellerDashboard({ user, isDarkMode }: SellerDashboardProps) {
+export default function SellerDashboard({ 
+  user = null, 
+  profile: initialProfile = null, 
+  isDarkMode = true 
+}: SellerDashboardProps) {
+  
   const [myPosts, setMyPosts] = useState<Post[]>([]);
-  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [profile, setProfile] = useState<UserProfile | null>(initialProfile);
   const [reportingPost, setReportingPost] = useState<Post | null>(null);
   const [tokenInput, setTokenInput] = useState('');
   const [step, setStep] = useState<'input' | 'payment'>('input');
@@ -33,9 +40,10 @@ export default function SellerDashboard({ user, isDarkMode }: SellerDashboardPro
   const activeBg = isDarkMode ? 'bg-[#D4AF37] text-black' : 'bg-[#E07A5F] text-white';
   const activeColor = isDarkMode ? 'text-[#D4AF37]' : 'text-[#E07A5F]';
 
-  // 1. WING: Real-time sync of Seller's Profile (Trust Score & Commission Rate)
+  // 1. Fetch Profile if not provided by parent
   useEffect(() => {
-    if (!user?.uid) return;
+    if (!user?.uid || initialProfile) return;
+    
     const profileRef = doc(db, "profiles", user.uid);
     const unsub = onSnapshot(profileRef, (docSnap) => {
       if (docSnap.exists()) {
@@ -43,11 +51,15 @@ export default function SellerDashboard({ user, isDarkMode }: SellerDashboardPro
       }
     });
     return () => unsub();
-  }, [user]);
+  }, [user, initialProfile]);
 
-  // 2. WING: Real-time sync of Seller's Specific Inventory
+  // 2. Real-time sync of Seller's Specific Inventory
   useEffect(() => {
-    if (!user?.uid) return;
+    if (!user?.uid) {
+      setLoading(false);
+      return;
+    }
+    
     const q = query(collection(db, "posts"), where("user_id", "==", user.uid));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Post[];
@@ -57,16 +69,21 @@ export default function SellerDashboard({ user, isDarkMode }: SellerDashboardPro
     return () => unsubscribe();
   }, [user]);
 
-  // 3. WING: Handle Sale Reporting Logic
+  // 3. Handle Sale Reporting Logic
   const handleReportSale = async () => {
-    if (!reportingPost || !tokenInput) return;
+    if (!reportingPost || !tokenInput || !user) return;
     setIsSubmitting(true);
 
-    // Dynamic Calculation based on the rate they chose at registration
-    const rate = profile?.commission_rate || 15;
-    const commissionAmount = (reportingPost.price || 0) * (rate / 100);
-
     try {
+      // Safe check: only call if function exists
+      if (typeof reportSaleAction !== 'function') {
+        throw new Error("Sales reporting service is currently unavailable.");
+      }
+
+      // Dynamic Calculation based on the rate they chose at registration
+      const rate = profile?.commission_rate || 15;
+      const commissionAmount = (reportingPost.price || 0) * (rate / 100);
+
       const result = await reportSaleAction(
         reportingPost.id, 
         user.uid, 
@@ -74,20 +91,33 @@ export default function SellerDashboard({ user, isDarkMode }: SellerDashboardPro
         commissionAmount
       );
 
-      if (result.success) {
+      if (result?.success) {
         setStep('payment');
       } else {
-        alert(result.error || "Token verification failed. Ask the buyer for the correct WCT-ET code.");
+        alert(result?.error || "Token verification failed. Ask the buyer for the correct WCT-ET code.");
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      alert("Error connecting to Wing services.");
+      alert(err.message || "Error connecting to Wing services.");
     } finally {
       setIsSubmitting(false);
     }
   };
 
   const isRestricted = (profile?.trust_score || 0) < 0;
+
+  // Show auth prompt if no user
+  if (!user && !loading) {
+    return (
+      <div className={`min-h-screen flex items-center justify-center p-8 ${isDarkMode ? 'bg-[#0A0A0A]' : 'bg-gray-50'}`}>
+        <div className={`text-center max-w-md p-8 rounded-3xl border ${isDarkMode ? 'bg-[#111] border-gray-800' : 'bg-white border-gray-100 shadow-sm'}`}>
+          <Package className="w-12 h-12 mx-auto mb-4 opacity-50" style={{ color: isDarkMode ? '#D4AF37' : '#E07A5F' }} />
+          <h3 className={`text-xl font-bold mb-2 ${isDarkMode ? 'text-white' : 'text-black'}`}>Sign In Required</h3>
+          <p className={`text-sm mb-6 ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>Please sign in to access your seller dashboard and manage your inventory.</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={`min-h-screen p-6 md:p-12 ${isDarkMode ? 'bg-[#0A0A0A]' : 'bg-gray-50'}`}>
