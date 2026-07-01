@@ -12,7 +12,24 @@ import {
 } from 'firebase/firestore';
 
 /**
- * 1. REPORT SALE (Called from SellerDashboard)
+ * 0. CREATE WING POST (Called from SocialFeed.tsx)
+ * This is the function that was missing and causing your Render error.
+ */
+export const createWingPost = async (postData: any) => {
+  try {
+    const docRef = await addDoc(collection(db, "posts"), {
+      ...postData,
+      created_at: serverTimestamp(), // Use Firestore server time
+    });
+    return { success: true, id: docRef.id };
+  } catch (error: any) {
+    console.error("Error creating post:", error);
+    return { success: false, error: error.message };
+  }
+};
+
+/**
+ * 1. REPORT SALE (Called from SellerDashboard.tsx)
  * Changes post status and creates a transaction record for Admin to review.
  */
 export const reportSaleAction = async (
@@ -30,7 +47,7 @@ export const reportSaleAction = async (
     
     const postData = postSnap.data();
     
-    // Security check: Ensure the token provided by the seller matches the buyer's token on the post
+    // Security check: Ensure token provided by seller matches the token on the post
     if (postData.wing_token !== token) {
       throw new Error("Invalid Token. Please verify with the buyer.");
     }
@@ -48,7 +65,7 @@ export const reportSaleAction = async (
     batch.set(reportRef, {
       postId,
       sellerId,
-      sellerName: postData.author_name || "Unknown Artisan", // Added for UI efficiency
+      sellerName: postData.author_name || "Unknown Artisan",
       token,
       commission,
       amount: postData.price,
@@ -66,7 +83,7 @@ export const reportSaleAction = async (
 };
 
 /**
- * 2. VERIFY SALE (Called from AdminDashboard)
+ * 2. VERIFY SALE (Called from AdminDashboard.tsx)
  * Marks item as officially sold and boosts the seller's reputation.
  */
 export const verifySaleAction = async (
@@ -81,7 +98,7 @@ export const verifySaleAction = async (
     const postRef = doc(db, 'posts', postId);
     batch.update(postRef, {
       sales_status: 'sold',
-      isVisible: false // Hide from marketplace
+      isVisible: false // Hide from main marketplace
     });
 
     // 2. Update the report status to COMPLETED
@@ -108,7 +125,7 @@ export const verifySaleAction = async (
 };
 
 /**
- * 3. FLAG FRAUD (Called from AdminDashboard)
+ * 3. FLAG FRAUD (Called from AdminDashboard.tsx)
  * Punishes dishonest sellers by dropping their score and resetting the item.
  */
 export const flagSellerAction = async (
