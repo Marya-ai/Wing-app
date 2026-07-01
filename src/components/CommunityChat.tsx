@@ -16,18 +16,18 @@ interface ChatMessage {
 }
 
 interface CommunityChatProps {
-  isDarkMode: boolean;
+  isDarkMode?: boolean; // Made optional with default
   userId?: string;
 }
 
 export default function CommunityChat({ 
-  isDarkMode, 
+  isDarkMode = true, // Default to dark mode if not provided
   userId = 'guest-user'
 }: CommunityChatProps) {
   
   // CONFIGURATION - SEPARATED BOT AND GROUP LINKS
-  const BOT_USERNAME = 'WingArtisanBot'; // Your actual bot username
-  const GROUP_INVITE_LINK = 'https://t.me/+CPZvg1Vb8Ns0NjA0'; // Your actual group link
+  const BOT_USERNAME = 'WingArtisanBot';
+  const GROUP_INVITE_LINK = 'https://t.me/+CPZvg1Vb8Ns0NjA0';
   
   const [isChatOpen, setIsChatOpen] = useState(false);
   
@@ -110,6 +110,12 @@ export default function CommunityChat({
 
   const startRecording = async () => {
     try {
+      // Check if browser supports getUserMedia
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        alert('Your browser does not support audio recording.');
+        return;
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
       mediaRecorderRef.current = recorder;
@@ -129,6 +135,8 @@ export default function CommunityChat({
         };
         
         setMessages(prev => [...prev, newMessage]);
+        // Stop all tracks to release microphone
+        stream.getTracks().forEach(track => track.stop());
         // TODO: Upload voice to storage & send to bot
       };
       
