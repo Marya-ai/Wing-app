@@ -6,6 +6,7 @@ import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { doc, onSnapshot } from 'firebase/firestore';
 
 // --- COMPONENT IMPORTS ---
+import LandingPage from './components/LandingPage'; // NEW: Landing Page Import
 import SocialFeed from './components/SocialFeed';
 import PostDetailView from './components/PostDetailView';
 import AuthModal from './components/AuthModal';
@@ -56,6 +57,7 @@ export default function WingApp() {
   const [loading, setLoading] = useState(true);
 
   // --- NAVIGATION & UI STATE ---
+  const [hasEntered, setHasEntered] = useState(false); // NEW: Track landing page state
   const [view, setView] = useState<string>('feed'); 
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -86,12 +88,18 @@ export default function WingApp() {
   const isAdmin = profile?.is_admin || user?.email === 'admin@wing.com';
   const toggleMenu = () => setIsMenuOpen(!isMenuOpen);
 
+  // Show loading spinner while checking auth
   if (loading) {
     return (
       <div className={`h-screen flex items-center justify-center ${isDarkMode ? 'bg-[#0A0A0A]' : 'bg-gray-50'}`}>
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-[#E07A5F]"></div>
       </div>
     );
+  }
+
+  // NEW: Render Landing Page if user hasn't entered yet
+  if (!hasEntered) {
+    return <LandingPage onGetStarted={() => setHasEntered(true)} />;
   }
 
   // Safe rendering function with Error Boundary
@@ -116,17 +124,17 @@ export default function WingApp() {
       case 'seller':
         return user ? <SellerDashboard {...commonProps} profile={profile} /> : <AuthRequired onAuth={() => setShowAuthModal(true)} />;
       case 'admin':
-        return isAdmin ? <AdminDashboard isDarkMode={isDarkMode} /> : <AccessDenied />;
+        return isAdmin ? <AdminDashboard {...commonProps} profile={profile} /> : <AccessDenied />;
       case 'notifications':
-        return <Notifications {...commonProps} />;
+        return <Notifications {...commonProps} lang={lang} onOpenAuth={() => setShowAuthModal(true)} onSelectPost={setSelectedPost} posts={[]} />;
       case 'chat':
         return <CommunityChat {...commonProps} />;
       case 'mentor':
-        return <AIMentor {...commonProps} />;
+        return <AIMentor {...commonProps} lang={lang} />;
       case 'studio':
-        return <MakerStudio {...commonProps} />;
+        return <MakerStudio {...commonProps} profile={profile} onPostShared={() => setView('feed')} lang={lang} />;
       case 'settings':
-        return <Settings {...commonProps} profile={profile} />;
+        return <Settings {...commonProps} profile={profile} onProfileUpdated={() => {}} onSelectPost={setSelectedPost} lang={lang} />;
       default:
         return <ComingSoon title={view} />;
     }
