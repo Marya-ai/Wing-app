@@ -7,7 +7,8 @@ import {
   doc, 
   serverTimestamp, 
   increment, 
-  getDoc 
+  getDoc,
+  writeBatch 
 } from 'firebase/firestore';
 
 /**
@@ -21,35 +22,43 @@ export const reportSaleAction = async (
   commission: number
 ) => {
   try {
-    // 1. Verify the post exists and token matches (Security Check)
+    // 1. Verify the post exists and token matches
     const postRef = doc(db, 'posts', postId);
     const postSnap = await getDoc(postRef);
 
     if (!postSnap.exists()) throw new Error("Post not found");
     
     const postData = postSnap.data();
+    
+    // Security check: Ensure the token provided by the seller matches the buyer's token on the post
     if (postData.wing_token !== token) {
       throw new Error("Invalid Token. Please verify with the buyer.");
     }
 
-    // 2. Update post status to 'pending_verification'
-    // This hides the 'Buy' button so no one else tries to buy it
-    await updateDoc(postRef, {
+    // 2. Use a Batch to update the Post and create the Report simultaneously
+    const batch = writeBatch(db);
+
+    // Update post status to 'pending_verification'
+    batch.update(postRef, {
       sales_status: 'pending_verification'
     });
 
-    // 3. Create a record in 'reports' collection for Admin
-    const reportRef = await addDoc(collection(db, 'reports'), {
+    // Create a record in 'reports' collection for Admin
+    const reportRef = doc(collection(db, 'reports'));
+    batch.set(reportRef, {
       postId,
       sellerId,
+      sellerName: postData.author_name || "Unknown Artisan", // Added for UI efficiency
       token,
       commission,
       amount: postData.price,
-      status: 'verifying', // Admin needs to check Telebirr
+      status: 'verifying',
       reportedAt: serverTimestamp(),
     });
 
+    await batch.commit();
     return { success: true, reportId: reportRef.id };
+
   } catch (error: any) {
     console.error("Error reporting sale:", error.message);
     return { success: false, error: error.message };
@@ -66,28 +75,32 @@ export const verifySaleAction = async (
   sellerId: string
 ) => {
   try {
+    const batch = writeBatch(db);
+
     // 1. Mark the post as officially SOLD
     const postRef = doc(db, 'posts', postId);
-    await updateDoc(postRef, {
-      sales_status: 'sold'
+    batch.update(postRef, {
+      sales_status: 'sold',
+      isVisible: false // Hide from marketplace
     });
 
     // 2. Update the report status to COMPLETED
     const reportRef = doc(db, 'reports', reportId);
-    await updateDoc(reportRef, {
+    batch.update(reportRef, {
       status: 'completed',
       verifiedAt: serverTimestamp()
     });
 
     // 3. BOOST SELLER TRUST SCORE (+10 points)
-    // This is the "Trusted Seller" logic
     const sellerRef = doc(db, 'profiles', sellerId);
-    await updateDoc(sellerRef, {
+    batch.update(sellerRef, {
       trust_score: increment(10),
       total_sales: increment(1)
     });
 
+    await batch.commit();
     return { success: true };
+
   } catch (error: any) {
     console.error("Error verifying sale:", error.message);
     return { success: false, error: error.message };
@@ -96,31 +109,39 @@ export const verifySaleAction = async (
 
 /**
  * 3. FLAG FRAUD (Called from AdminDashboard)
- * Punishes dishonest sellers by dropping their score and hiding their items.
+ * Punishes dishonest sellers by dropping their score and resetting the item.
  */
-export const flagSellerAction = async (sellerId: string, reportId: string, postId: string) => {
+export const flagSellerAction = async (
+  sellerId: string, 
+  reportId: string, 
+  postId: string
+) => {
   try {
+    const batch = writeBatch(db);
+
     // 1. Mark report as FRAUD
     const reportRef = doc(db, 'reports', reportId);
-    await updateDoc(reportRef, {
+    batch.update(reportRef, {
       status: 'fraud_flagged',
       flaggedAt: serverTimestamp()
     });
 
     // 2. Reset the post to 'available' so someone else can buy it
     const postRef = doc(db, 'posts', postId);
-    await updateDoc(postRef, {
+    batch.update(postRef, {
       sales_status: 'available'
     });
 
     // 3. PUNISH SELLER (-50 points)
-    // This will trigger the "Fraud Risk" badge in the UI
     const sellerRef = doc(db, 'profiles', sellerId);
-    await updateDoc(sellerRef, {
-      trust_score: increment(-50)
+    batch.update(sellerRef, {
+      trust_score: increment(-50),
+      isFlagged: true
     });
 
+    await batch.commit();
     return { success: true, message: "Seller penalized for fraud." };
+
   } catch (error: any) {
     console.error("Error flagging seller:", error.message);
     return { success: false, error: error.message };

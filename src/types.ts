@@ -1,3 +1,4 @@
+// --- USER & ARTISAN PROFILE ---
 export interface UserProfile {
   id: string;
   username: string;
@@ -8,9 +9,59 @@ export interface UserProfile {
   theme_preference: 'light' | 'dark';
   telegram_username?: string;
   telegram_chat_id?: string;
+  
+  // WING ADDITIONS
+  phone?: string;             // For Telebirr
+  trust_score: number;        // Artisan reputation (0-100+)
+  commission_rate: number;    // Chosen rate (10-25%)
+  has_agreed: boolean;        // Agreement to terms
+  is_admin?: boolean;         // Access to Admin Dashboard
+  total_sales?: number;       // Number of verified sales
+  isFlagged?: boolean;        // Fraud protection flag
+  
   created_at: string;
 }
 
+// --- MARKETPLACE POSTS (CRAFTS) ---
+export interface Post {
+  id: string;
+  user_id: string;
+  author_name: string;
+  author_avatar?: string;
+  image_url: string;
+  caption: string;
+  post_type: 'finished' | 'wip';
+  category: string;           // Required for filtering
+  
+  // WING ADDITIONS
+  price: number;
+  stock_count: number;
+  wing_token: string;         // Unique WCT-ET-XXXXXX code
+  sales_status: 'available' | 'pending_verification' | 'sold';
+  trust_score: number;        // Cached from seller for feed display
+  
+  materials?: string[];
+  tools?: string[];
+  likes_count: number;
+  comments_count: number;
+  created_at: string;
+}
+
+// --- WING SALES REPORTS (FOR ADMIN) ---
+export interface SaleReport {
+  id: string;
+  postId: string;
+  sellerId: string;
+  sellerName: string;
+  token: string;
+  amount: number;
+  commission: number;
+  status: 'verifying' | 'completed' | 'fraud_flagged';
+  reportedAt: any;            // Firebase Timestamp
+  verifiedAt?: any;
+}
+
+// --- NOTIFICATIONS ---
 export interface Notification {
   id: string;
   user_id: string;
@@ -24,22 +75,7 @@ export interface Notification {
   read: boolean;
 }
 
-export interface Post {
-  id: string;
-  user_id: string;
-  author_name: string;
-  author_avatar?: string;
-  image_url: string;
-  caption: string;
-  post_type: 'finished' | 'wip';
-  category?: string;
-  materials?: string[];
-  tools?: string[];
-  likes_count: number;
-  comments_count: number;
-  created_at: string;
-}
-
+// --- SOCIAL INTERACTIONS ---
 export interface Comment {
   id: string;
   post_id: string;
@@ -58,6 +94,7 @@ export interface Save {
   created_at: string;
 }
 
+// --- PRODUCTIVITY ---
 export interface DailyLog {
   id: string;
   user_id: string;
@@ -68,11 +105,12 @@ export interface DailyLog {
   created_at: string;
 }
 
+// --- CHAT & MESSAGING ---
 export interface ChatRoom {
   id: string;
   name: string;
   type: 'public' | 'private';
-  participants?: string[]; // UIDs for private chats
+  participants?: string[]; 
   created_at: string;
 }
 
