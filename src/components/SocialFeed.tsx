@@ -34,17 +34,17 @@ const TRANSLATIONS: Record<string, Record<string, string>> = {
   am: {
     searchPlaceholder: "የኢትዮጵያ ጥበቦችን ፈልጉ...",
     postWork: "ስራን ያውጡ",
-    exploreFeed: "መመገቢያ ይመልከቱ",
+    exploreFeed: "መመገቢያ ይመልቱ",
     sellerOffice: "ሻጭ ቢሮ",
     notifications: "ማሳወቂያዎች",
     communityChat: "ማህበረሰብ ውይይት",
     aiMentor: "AI አማካሪ",
-    myStudio: "የእኔ ስቱዮ",
+    myStudio: "የእኔ ስቱ",
     exit: "ውጣ",
     loadingMarketplace: "ገበያው እየተነ ነው...",
     noCraftsFound: "ምንም ጥበብ አልተገኘም",
     syncingCloud: "ከንግ ክላውድ ጋር እየተሳሰረ ነው...",
-    priceOnReq: "ዋ በጥያቄ",
+    priceOnReq: "ዋ በያቄ",
     newArtisan: "አዲስ ጥበበኛ",
     trustScore: "የታማኝነት ነጥብ"
   }
@@ -115,7 +115,14 @@ export default function SocialFeed({
   const [commentText, setCommentText] = useState('');
   const [isPostingComment, setIsPostingComment] = useState(false);
 
-  const t = (key: string) => currentLang === 'am' && TRANSLATIONS.am[key] ? TRANSLATIONS.am[key] : key.replace(/([A-Z])/g, ' $1').trim();
+  // FIX: Safe translation helper that never crashes
+  const t = (key: string) => {
+    if (!key) return '';
+    const translated = currentLang === 'am' && TRANSLATIONS.am[key] ? TRANSLATIONS.am[key] : null;
+    if (translated) return translated;
+    // Fallback: safely format camelCase keys without crashing
+    return String(key).replace(/([A-Z])/g, ' $1').trim();
+  };
 
   const activeBg = isDarkMode ? 'bg-[#D4AF37] text-black' : 'bg-[#E07A5F] text-white';
   const cardBg = isDarkMode ? 'bg-[#121212] border-[#1A1A1A]' : 'bg-white border-gray-100';
@@ -131,12 +138,15 @@ export default function SocialFeed({
     return () => unsubscribe();
   }, []);
 
-  // Filter Posts
+  // Filter Posts - FIX: Safe access to potentially undefined fields
   useEffect(() => {
     let result = [...posts];
     if (activeSearchQuery.trim()) {
       const q = activeSearchQuery.toLowerCase();
-      result = result.filter(p => p.caption?.toLowerCase().includes(q) || p.author_name?.toLowerCase().includes(q));
+      result = result.filter(p => 
+        (p.caption || '').toLowerCase().includes(q) || 
+        (p.author_name || '').toLowerCase().includes(q)
+      );
     }
     if (filterType !== 'all') result = result.filter(p => p.post_type === filterType);
     if (selectedCategory !== 'all') result = result.filter(p => p.category === selectedCategory);
@@ -180,7 +190,7 @@ export default function SocialFeed({
     setSubmittingPost(true);
     const postData = {
       user_id: user.uid,
-      author_name: profile?.full_name || user.displayName,
+      author_name: profile?.full_name || user.displayName || 'Anonymous Artisan',
       author_avatar: profile?.avatar_url || `https://api.dicebear.com/7.x/bottts/svg?seed=${user.uid}`,
       image_url: newImgUrl,
       caption: processDescription,
@@ -220,7 +230,7 @@ export default function SocialFeed({
     const newComment = {
       id: Date.now().toString(),
       user_id: user.uid,
-      author_name: profile?.full_name || user.displayName,
+      author_name: profile?.full_name || user.displayName || 'Anonymous',
       author_avatar: profile?.avatar_url || `https://api.dicebear.com/7.x/bottts/svg?seed=${user.uid}`,
       text: commentText,
       created_at: new Date().toISOString()
@@ -342,6 +352,11 @@ export default function SocialFeed({
         <div className="columns-2 md:columns-3 lg:columns-4 xl:columns-5 gap-8 space-y-8 max-w-7xl mx-auto">
           {filteredPosts.map((post) => {
             const isFraud = (post.trust_score || 0) < 0;
+            // FIX: Safe defaults for display
+            const safeCaption = post.caption || 'No description';
+            const safeAuthor = post.author_name || 'Anonymous';
+            const safePrice = post.price || 0;
+            
             return (
               <div 
                 key={post.id} 
@@ -351,7 +366,7 @@ export default function SocialFeed({
                 <div className="relative aspect-square overflow-hidden">
                   <img src={post.image_url} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-1000" alt="" />
                   <div className="absolute top-4 right-4 bg-black/60 backdrop-blur-md text-white text-[10px] font-black px-4 py-2 rounded-full shadow-lg border border-white/10">
-                    {post.price > 0 ? `${post.price.toLocaleString()} ETB` : t('priceOnReq')}
+                    {safePrice > 0 ? `${safePrice.toLocaleString()} ETB` : t('priceOnReq')}
                   </div>
                   <div className="absolute bottom-4 left-4 scale-90 origin-bottom-left">
                     <ReputationBadge score={post.trust_score || 0} isBanned={isFraud} size="sm" />
@@ -361,11 +376,11 @@ export default function SocialFeed({
                   )}
                 </div>
                 <div className="p-6">
-                  <p className="text-[12px] font-bold line-clamp-2 dark:text-gray-200 leading-relaxed mb-5">{post.caption}</p>
+                  <p className="text-[12px] font-bold line-clamp-2 dark:text-gray-200 leading-relaxed mb-5">{safeCaption}</p>
                   <div className="flex items-center justify-between pt-4 border-t dark:border-gray-800">
                     <div className="flex items-center gap-2">
                        <img src={post.author_avatar} className="w-6 h-6 rounded-full border dark:border-gray-700" alt="" />
-                       <span className="text-[9px] font-black text-gray-500 uppercase truncate max-w-[80px]">{post.author_name}</span>
+                       <span className="text-[9px] font-black text-gray-500 uppercase truncate max-w-[80px]">{safeAuthor}</span>
                     </div>
                     <div className="flex items-center gap-1.5 text-gray-400">
                        <Heart size={14} />
@@ -395,7 +410,7 @@ export default function SocialFeed({
               <div className="flex items-center gap-4 mb-8">
                 <img src={selectedPostDetail.author_avatar} className="w-12 h-12 rounded-full border-2 dark:border-gray-700" alt="" />
                 <div>
-                  <h3 className={`text-lg font-black uppercase tracking-tight ${isDarkMode ? 'text-white' : 'text-black'}`}>{selectedPostDetail.author_name}</h3>
+                  <h3 className={`text-lg font-black uppercase tracking-tight ${isDarkMode ? 'text-white' : 'text-black'}`}>{selectedPostDetail.author_name || 'Anonymous'}</h3>
                   <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">{new Date(selectedPostDetail.created_at).toLocaleDateString()}</p>
                 </div>
                 <div className="ml-auto">
@@ -403,11 +418,11 @@ export default function SocialFeed({
                 </div>
               </div>
 
-              <p className={`text-sm font-bold leading-relaxed mb-8 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>{selectedPostDetail.caption}</p>
+              <p className={`text-sm font-bold leading-relaxed mb-8 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>{selectedPostDetail.caption || 'No description provided.'}</p>
 
               <div className="flex items-center justify-between mb-8 pb-8 border-b dark:border-gray-800">
                  <div className={`text-2xl font-black ${isDarkMode ? 'text-[#D4AF37]' : 'text-[#E07A5F]'}`}>
-                   {selectedPostDetail.price > 0 ? `${selectedPostDetail.price.toLocaleString()} ETB` : t('priceOnReq')}
+                   {(selectedPostDetail.price || 0) > 0 ? `${(selectedPostDetail.price || 0).toLocaleString()} ETB` : t('priceOnReq')}
                  </div>
                  <button onClick={() => handleLike(selectedPostDetail.id)} className="flex items-center gap-2 px-6 py-3 rounded-full bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white transition-all font-black text-xs uppercase tracking-widest">
                    <Heart size={16} fill="currentColor" /> {selectedPostDetail.likes_count || 0} Likes
@@ -424,7 +439,7 @@ export default function SocialFeed({
                         <img src={comment.author_avatar} className="w-8 h-8 rounded-full border dark:border-gray-700" alt="" />
                         <div className="flex-1">
                           <div className="flex items-center justify-between mb-1">
-                            <span className="text-[10px] font-black uppercase text-gray-400">{comment.author_name}</span>
+                            <span className="text-[10px] font-black uppercase text-gray-400">{comment.author_name || 'Anonymous'}</span>
                             {user && user.uid === comment.user_id && (
                               <button onClick={() => handleDeleteComment(comment.id)} className="opacity-0 group-hover:opacity-100 transition-opacity text-red-500 hover:text-red-400">
                                 <Trash2 size={12} />
