@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { db } from '../lib/firebase';
-import { collection, query, where, orderBy, getDocs, updateDoc, doc, onSnapshot, getDoc, writeBatch } from 'firebase/firestore';
+import { collection, query, where, orderBy, onSnapshot, doc, writeBatch, getDoc } from 'firebase/firestore';
 import { Notification, Post } from '../types';
 import { translations, Language } from '../lib/translations';
 import { 
@@ -11,10 +11,10 @@ import {
 interface NotificationsProps {
   user: any;
   isDarkMode: boolean;
-  lang: Language;
-  onOpenAuth: () => void;
-  onSelectPost: (post: Post) => void;
-  posts: Post[];
+  lang?: Language; // Made optional to prevent crash
+  onOpenAuth?: () => void; // Made optional
+  onSelectPost?: (post: Post) => void; // Made optional
+  posts?: Post[]; // Made optional
 }
 
 // Helper for relative time formatting
@@ -36,15 +36,17 @@ const getRelativeTime = (dateString: string) => {
 export default function Notifications({
   user,
   isDarkMode,
-  lang,
+  lang = 'en', // Default to 'en' if not provided
   onOpenAuth,
   onSelectPost,
-  posts
+  posts = [] // Default to empty array
 }: NotificationsProps) {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
   const [markingRead, setMarkingRead] = useState(false);
-  const t = translations[lang];
+  
+  // Safe translation fallback
+  const t = translations[lang as Language] || translations['en'];
 
   // Derived state for unread count
   const unreadCount = useMemo(() => notifications.filter(n => !n.read).length, [notifications]);
@@ -77,7 +79,7 @@ export default function Notifications({
           sender_avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&q=80&w=150',
           type: 'system',
           content: lang === 'am' 
-            ? 'እንኳን ደ ዊንግ ላትፎርም በደህና መጡ! በእ የተሰሩ የእደ-ጥበብ ስራዎችዎን በማራት፣ ከሌሎች ባለሙያዎች ጋር ይወያዩ' 
+            ? 'እንኳን ደህና መጡ! በዊንግ ላትፎርም የተሰሩ የእደ-ጥበብ ስራዎችን ያሳዩ ከሌሎች ባለያዎች ጋር ወያዩ' 
             : 'Welcome to WING Artisan Platform! Showcase your traditional craft, track WIP logs, and get feedback from masters.',
           created_at: new Date().toISOString(),
           read: false
@@ -89,7 +91,7 @@ export default function Notifications({
           sender_name: 'Telegram Bot Coordinator 🤖',
           type: 'telegram',
           content: lang === 'am'
-            ? 'ቅንብሮች ውስጥ በመግት የቴሌግራም መለያዎን ያስቡ፤ ገዢዎች በቀላ እንዲያገኙዎት ይረዳል'
+            ? 'ቅንብሮች ውስ የቴሌግራም መለያዎን ስገቡ፤ ዢዎች በቀላሉ እንዲያገኙዎት ይረዳል'
             : 'Add your Telegram Username under Settings so buyers can purchase your crafts directly through the Telegram bot privately!',
           created_at: new Date(Date.now() - 60000).toISOString(),
           read: false
@@ -136,7 +138,7 @@ export default function Notifications({
   };
 
   const handleNotifClick = async (notif: Notification) => {
-    if (notif.post_id) {
+    if (notif.post_id && onSelectPost) {
       const match = posts.find(p => p.id === notif.post_id);
       if (match) {
         onSelectPost(match);
@@ -146,7 +148,7 @@ export default function Notifications({
           if (postDoc.exists()) {
             onSelectPost({ id: postDoc.id, ...postDoc.data() } as Post);
           } else {
-            alert(lang === 'am' ? 'ይህ ልፍ አልተገም ወይም ተሰርል።' : 'This post could not be found or has been deleted.');
+            alert(lang === 'am' ? 'ይህ ልፍ አልተገኘም ወይም ተሰርዟል።' : 'This post could not be found or has been deleted.');
           }
         } catch (err) {
           console.error("Failed to fetch targeted pin:", err);
@@ -177,11 +179,11 @@ export default function Notifications({
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 pb-6 border-b border-opacity-10 mb-8 transition-colors duration-200 border-gray-200 dark:border-gray-800">
         <div>
           <h2 className={`text-2xl font-bold tracking-tight mb-1 flex items-center gap-2 ${textPrimary}`}>
-            <Bell className={`w-6 h-6 ${activeColor}`} /> {t.notifications}
+            <Bell className={`w-6 h-6 ${activeColor}`} /> {t.notifications || 'Notifications'}
           </h2>
           <p className={`text-sm ${textSecondary}`}>
             {lang === 'am' 
-              ? 'ስለ እደ-ጥበብ ጥፎችዎ፣ የተሰጡ አስተያየቶችን እና ማህበራዊ ግንነቶችን እዚህ ከታተሉ።' 
+              ? 'ስለ እደ-ጥበብ ጥፎችዎ የተሰጡ አስተያየቶችን እና ማበራዊ ግንነቶችን እዚህ ከታተሉ' 
               : 'Track comments, likes, saves, and important updates to your creative crafts and studio profile.'}
           </p>
         </div>
@@ -210,21 +212,23 @@ export default function Notifications({
             <Bell className={`w-8 h-8 opacity-50 ${textSecondary}`} />
           </div>
           <h3 className={`text-lg font-bold mb-2 ${textPrimary}`}>
-            {lang === 'am' ? 'ማስታወቂያዎችን ለመመልከት ይቡ' : 'Sign in to see notifications'}
+            {lang === 'am' ? 'ማወቂያዎችን መመልከት ይቡ' : 'Sign in to see notifications'}
           </h3>
           <p className={`text-sm mb-8 leading-relaxed max-w-md mx-auto ${textSecondary}`}>
             {lang === 'am' 
-              ? 'መለያዎን በማገናኘት ልጥችዎ ላይ የሚረጉ መስተጋብሮችን፣ አስተያየቶችን እና የግል መልዕክቶችን በቅጽበት ይከታተሉ።' 
+              ? 'መለያዎን በማገናኘት ልጥፎችዎ ላይ የሚደረጉ መስተጋብሮችን፣ አስተያየቶችን እና የግል መልዕክቶችን በጽበት ይከታተሉ።' 
               : 'Sync your artisan wallet or sign up with an email to review real-time likes, comment threads, and buyer purchase requests.'}
           </p>
-          <button
-            onClick={onOpenAuth}
-            className={`px-8 py-3 rounded-xl font-bold text-sm transition-all duration-200 shadow-lg hover:shadow-xl hover:-translate-y-0.5 ${
-              isDarkMode ? 'bg-[#D4AF37] text-black hover:bg-[#E5C048]' : 'bg-[#E07A5F] text-white hover:bg-[#F08A6F]'
-            }`}
-          >
-            {t.connectWallet}
-          </button>
+          {onOpenAuth && (
+            <button
+              onClick={onOpenAuth}
+              className={`px-8 py-3 rounded-xl font-bold text-sm transition-all duration-200 shadow-lg hover:shadow-xl hover:-translate-y-0.5 ${
+                isDarkMode ? 'bg-[#D4AF37] text-black hover:bg-[#E5C048]' : 'bg-[#E07A5F] text-white hover:bg-[#F08A6F]'
+              }`}
+            >
+              {t.connectWallet || 'Sign In'}
+            </button>
+          )}
         </div>
       ) : loading ? (
         <div className="flex flex-col items-center justify-center py-32 gap-4">
@@ -294,7 +298,7 @@ export default function Notifications({
                 </p>
                 {notif.post_id && (
                   <span className={`text-[11px] font-semibold mt-2 inline-flex items-center gap-1 group-hover:gap-1.5 transition-all ${activeColor}`}>
-                    {lang === 'am' ? 'ልፉን ይመልከቱ' : 'View Pin'} <ArrowRight className="w-3 h-3" />
+                    {lang === 'am' ? 'ልጥፉን ይመልከቱ' : 'View Pin'} <ArrowRight className="w-3 h-3" />
                   </span>
                 )}
               </div>
