@@ -7,9 +7,20 @@ import {
   signOut as signOutFirebase,
   updateProfile as updateProfileFirebase
 } from 'firebase/auth';
-import { getFirestore, doc, getDocFromServer, collection, getDocs, query, where, setDoc } from 'firebase/firestore';
+import { 
+  getFirestore, 
+  doc, 
+  getDocFromServer, 
+  collection, 
+  getDocs, 
+  query, 
+  where, 
+  setDoc,
+  serverTimestamp 
+} from 'firebase/firestore';
+import { getStorage } from 'firebase/storage';
 
-// Configuration updated with your new project keys
+// Configuration for your Wing App project
 const firebaseConfig = {
   apiKey:  "AIzaSyCdeRDZtCiQCSelwaP-y9xDycqAN5lRZio",
   authDomain: "wing-app-55bc8.firebaseapp.com",
@@ -20,22 +31,22 @@ const firebaseConfig = {
   measurementId: "G-ECH94GSHDS"
 };
 
-// Initialize Firebase
+// Initialize Firebase Core
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-// Using standard Firestore initialization for your new project
 export const db = getFirestore(app);
+export const storage = getStorage(app); // Added for product image storage
 
-// Test Connection
+// Test Connection Helper
 async function testConnection() {
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
-    console.log("Firebase Connection Successful!");
+    console.log("✅ WING Firebase: Connection Successful!");
   } catch (error) {
     if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error("Please check your Firebase configuration. The client appears to be offline.");
+      console.error("❌ WING Firebase: Client is offline. Check internet.");
     } else {
-      console.log("Firebase initial response received (test collection check done).");
+      console.log("ℹ️ WING Firebase: Initial handshake received.");
     }
   }
 }
@@ -43,6 +54,7 @@ async function testConnection() {
 testConnection();
 
 // --- RESILIENT AUTH FALLBACK MOTOR ---
+// This handles the custom 'profiles' collection auth if standard Firebase Auth is disabled
 let currentCustomUser: any = null;
 const authStateCallbacks: Array<(user: any) => void> = [];
 
@@ -70,11 +82,9 @@ function triggerAuthCallbacks(user: any) {
 export function onAuthStateChanged(authInstance: any, callback: (user: any) => void) {
   authStateCallbacks.push(callback);
   
-  // Call immediately with existing state (preferring custom session, then standard)
   const initialUser = currentCustomUser || authInstance.currentUser;
   callback(initialUser);
 
-  // Subscribe to real Firebase auth
   const unsubFirebase = onAuthStateChangedFirebase(authInstance, (firebaseUser) => {
     if (firebaseUser) {
       currentCustomUser = null;
@@ -98,32 +108,33 @@ export function onAuthStateChanged(authInstance: any, callback: (user: any) => v
   };
 }
 
-// Wrapper for signInWithEmailAndPassword
+// Wrapper for signInWithEmailAndPassword (with Profile fallback)
 export async function signInWithEmailAndPassword(authInstance: any, email: string, password: string) {
   try {
     const cred = await signInWithEmailAndPasswordFirebase(authInstance, email, password);
     return cred;
   } catch (err: any) {
+    // If standard auth fails or is not enabled, check our custom profiles collection
     if (
       err.code === 'auth/operation-not-allowed' || 
       err.code === 'auth/configuration-not-found' || 
       err.message?.includes('operation-not-allowed')
     ) {
-      console.warn("Firebase authentication email/password not enabled. Initiating secure custom database auth...");
+      console.warn("WING: Using Custom Profile Auth Fallback...");
       const emailLower = email.toLowerCase().trim();
       const profilesCol = collection(db, 'profiles');
       const q = query(profilesCol, where('email', '==', emailLower));
       const snap = await getDocs(q);
 
       if (snap.empty) {
-        throw new Error("No account found with this email. Please click Sign Up above to register!");
+        throw new Error("No account found with this email on WING.");
       }
 
       const profileDoc = snap.docs[0];
       const profileData = profileDoc.data();
 
       if (profileData.password !== password) {
-        throw new Error("Incorrect password. Please verify and try again.");
+        throw new Error("Incorrect password for WING account.");
       }
 
       const customUser = {
@@ -131,6 +142,8 @@ export async function signInWithEmailAndPassword(authInstance: any, email: strin
         email: emailLower,
         displayName: profileData.full_name || 'Artisan',
         photoURL: profileData.avatar_url || `https://api.dicebear.com/7.x/bottts/svg?seed=${profileDoc.id}`,
+        trust_score: profileData.trust_score || 50, // WING: Reputation support
+        role: profileData.role || 'seller',
         isCustom: true
       };
 
@@ -144,7 +157,7 @@ export async function signInWithEmailAndPassword(authInstance: any, email: strin
   }
 }
 
-// Wrapper for createUserWithEmailAndPassword
+// Wrapper for createUserWithEmailAndPassword (with Profile fallback)
 export async function createUserWithEmailAndPassword(authInstance: any, email: string, password: string) {
   try {
     const cred = await createUserWithEmailAndPasswordFirebase(authInstance, email, password);
@@ -155,7 +168,7 @@ export async function createUserWithEmailAndPassword(authInstance: any, email: s
       err.code === 'auth/configuration-not-found' || 
       err.message?.includes('operation-not-allowed')
     ) {
-      console.warn("Firebase authentication email/password not enabled. Registering via custom database auth...");
+      console.warn("WING: Registering via Custom Profile Database...");
       const emailLower = email.toLowerCase().trim();
       const profilesCol = collection(db, 'profiles');
       const q = query(profilesCol, where('email', '==', emailLower));
@@ -171,6 +184,7 @@ export async function createUserWithEmailAndPassword(authInstance: any, email: s
         email: emailLower,
         displayName: '',
         photoURL: `https://api.dicebear.com/7.x/bottts/svg?seed=${uid}`,
+        trust_score: 50, // WING: Start new users with 50 points
         isCustom: true,
         _tempPassword: password
       };
@@ -185,7 +199,7 @@ export async function createUserWithEmailAndPassword(authInstance: any, email: s
   }
 }
 
-// Wrapper for updateProfile
+// Wrapper for updateProfile (Syncs with custom profiles collection)
 export async function updateProfile(userInstance: any, { displayName, photoURL }: { displayName?: string, photoURL?: string }) {
   if (userInstance && userInstance.isCustom) {
     const updatedUser = {
@@ -196,12 +210,14 @@ export async function updateProfile(userInstance: any, { displayName, photoURL }
     currentCustomUser = updatedUser;
     localStorage.setItem('wing_custom_user', JSON.stringify(updatedUser));
 
-    // Persist changes to profile document synchronously
+    // Save to Firestore 'profiles'
     const docRef = doc(db, 'profiles', userInstance.uid);
     await setDoc(docRef, {
       full_name: displayName,
       avatar_url: photoURL,
       email: userInstance.email,
+      trust_score: userInstance.trust_score || 50,
+      updated_at: serverTimestamp(),
       ...(userInstance._tempPassword ? { password: userInstance._tempPassword } : {})
     }, { merge: true });
 

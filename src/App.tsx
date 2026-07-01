@@ -1,263 +1,92 @@
-import { useState, useEffect } from 'react';
-import { User } from 'firebase/auth';
-import { auth, onAuthStateChanged, signOut, db } from './lib/firebase';
-import { doc, onSnapshot } from 'firebase/firestore';
-import { getProfile, seedDatabaseIfEmpty, getOrCreateDirectMessageRoom } from './lib/services';
-import { UserProfile, Post } from './types';
-import { Language } from './lib/translations';
-
-// Components
-import Sidebar from './components/Sidebar';
+import React, { useState } from 'react';
 import SocialFeed from './components/SocialFeed';
-import PinDetailModal from './components/PinDetailModal';
-import MakerStudio from './components/MakerStudio';
-import AIMentor from './components/AIMentor';
-import CommunityChat from './components/CommunityChat';
-import Settings from './components/Settings';
-import AuthModal from './components/AuthModal';
-import Notifications from './components/Notifications';
+import PostDetailView from './components/PostDetailView';
+import SellerDashboard from './components/SellerDashboard';
+import AdminDashboard from './components/AdminDashboard';
+import { Post } from './types';
 
-import { ShieldAlert, Info } from 'lucide-react';
+// MOCK DATA: To test the system immediately
+const MOCK_USER = { uid: 'user_123', role: 'seller' }; 
 
-export default function App() {
-  const [activeTab, setActiveTab] = useState<string>('home');
-  const [user, setUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [isAuthOpen, setIsAuthOpen] = useState(false);
-  const [isDarkMode, setIsDarkMode] = useState(false);
-  const [lang, setLang] = useState<Language>(() => {
-    const saved = localStorage.getItem('wing_lang');
-    return (saved === 'am' || saved === 'en') ? saved : 'en';
-  });
+export default function WingApp() {
+  // 1. Navigation State: 'feed' | 'seller' | 'admin'
+  const [view, setView] = useState<'feed' | 'seller' | 'admin'>('feed');
   
-  // Modals / Focus states
+  // 2. Interaction State
   const [selectedPost, setSelectedPost] = useState<Post | null>(null);
-  const [activeSearchQuery, setActiveSearchQuery] = useState('');
+  const [isDarkMode, setIsDarkMode] = useState(true);
   
-  // Realtime DMs focused room
-  const [focusedRoomId, setFocusedRoomId] = useState<string | null>(null);
-  const [focusedRoomName, setFocusedRoomName] = useState<string | null>(null);
-
-  const handleSetLang = (newLang: Language) => {
-    setLang(newLang);
-    localStorage.setItem('wing_lang', newLang);
-  };
-
-  // 1. Initial Seeding of Sample Data when App boots
-  useEffect(() => {
-    seedDatabaseIfEmpty();
-  }, []);
-
-  // 2. Auth State Changed Observer
-  useEffect(() => {
-    let profileUnsub: (() => void) | null = null;
-    const unsub = onAuthStateChanged(auth, async (currentUser) => {
-      setUser(currentUser);
-      if (profileUnsub) {
-        profileUnsub();
-        profileUnsub = null;
-      }
-      if (currentUser) {
-        // Listen to the profile in real-time to solve race condition!
-        profileUnsub = onSnapshot(doc(db, 'profiles', currentUser.uid), (docSnap) => {
-          if (docSnap.exists()) {
-            const userProfile = docSnap.data() as UserProfile;
-            setProfile(userProfile);
-            if (userProfile.theme_preference) {
-              setIsDarkMode(userProfile.theme_preference === 'dark');
-            }
-          } else {
-            setProfile(null);
-          }
-        }, (err) => {
-          console.error("Error listening to profile", err);
-        });
-      } else {
-        setProfile(null);
-      }
-    });
-    return () => {
-      unsub();
-      if (profileUnsub) profileUnsub();
-    };
-  }, []);
-
-  // 3. Sync profile if updated elsewhere
-  const handleReloadProfile = async () => {
-    if (user) {
-      const p = await getProfile(user.uid);
-      setProfile(p);
-    }
-  };
-
-  // 4. Log out handler
-  const handleLogout = async () => {
-    try {
-      await signOut(auth);
-      setUser(null);
-      setProfile(null);
-      setActiveTab('home');
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
-  // 5. DM Trigger from Post Detail Modal
-  const handleMessageMaker = async (makerId: string, makerName: string) => {
-    if (!user) {
-      setIsAuthOpen(true);
-      return;
-    }
-    try {
-      const myName = profile?.full_name || user.displayName || 'Artisan';
-      const roomId = await getOrCreateDirectMessageRoom(user.uid, makerId, myName, makerName);
-      
-      setFocusedRoomId(roomId);
-      setFocusedRoomName(makerName);
-      setSelectedPost(null); // Close post modal
-      setActiveTab('messages'); // Swap tab to private messages
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
-  const handleSelectPostFromSettings = (post: Post) => {
-    setSelectedPost(post);
-  };
-
-  const activeBg = isDarkMode 
-    ? 'bg-[#121212] text-[#EAEAEA]' 
-    : 'bg-[#FDFBF7] text-[#2C2C2C]';
+  // 3. Search State
+  const [searchQuery, setSearchQuery] = useState('');
 
   return (
-    <div className={`min-h-screen flex flex-col md:flex-row transition-colors duration-300 ${activeBg}`}>
+    <div className={`min-h-screen transition-colors duration-500 ${isDarkMode ? 'bg-[#0A0A0A] text-white' : 'bg-[#FAF9F6] text-black'}`}>
       
-      {/* Floating Language Toggler */}
-      <div className="fixed top-4 right-4 z-50 flex items-center gap-1.5 bg-white/90 dark:bg-black/90 backdrop-blur-md px-3 py-1.5 rounded-full border shadow-sm border-gray-200 dark:border-gray-800">
-        <button
-          id="lang-toggle-en"
-          onClick={() => handleSetLang('en')}
-          className={`text-[10px] font-bold px-2 py-1 rounded-full cursor-pointer transition-all ${
-            lang === 'en' 
-              ? 'bg-[#E07A5F] dark:bg-[#D4AF37] text-white dark:text-black shadow-sm' 
-              : 'text-gray-400 dark:text-gray-500'
-          }`}
+      {/* --- WING NAVIGATION BAR --- */}
+      <nav className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-[4000] px-6 py-4 rounded-full border shadow-2xl backdrop-blur-xl flex items-center gap-8 ${isDarkMode ? 'bg-black/50 border-gray-800' : 'bg-white/80 border-gray-200'}`}>
+        <button 
+          onClick={() => setView('feed')}
+          className={`text-[10px] font-black uppercase tracking-widest ${view === 'feed' ? 'text-[#E07A5F]' : 'text-gray-500'}`}
         >
-          EN
+          Explore
         </button>
-        <button
-          id="lang-toggle-am"
-          onClick={() => handleSetLang('am')}
-          className={`text-[10px] font-bold px-2 py-1 rounded-full cursor-pointer transition-all ${
-            lang === 'am' 
-              ? 'bg-[#E07A5F] dark:bg-[#D4AF37] text-white dark:text-black shadow-sm' 
-              : 'text-gray-400 dark:text-gray-500'
-          }`}
+        <button 
+          onClick={() => setView('seller')}
+          className={`text-[10px] font-black uppercase tracking-widest ${view === 'seller' ? 'text-[#E07A5F]' : 'text-gray-500'}`}
         >
-          አማ
+          My Shop
         </button>
-      </div>
+        <button 
+          onClick={() => setView('admin')}
+          className={`text-[10px] font-black uppercase tracking-widest ${view === 'admin' ? 'text-[#E07A5F]' : 'text-gray-500'}`}
+        >
+          Wing Admin
+        </button>
+        <div className="w-[1px] h-4 bg-gray-700" />
+        <button onClick={() => setIsDarkMode(!isDarkMode)} className="text-lg">
+          {isDarkMode ? '🌙' : '☀️'}
+        </button>
+      </nav>
 
-      {/* Sidebar (Desktop and Mobile combined) */}
-      <Sidebar
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        user={user}
-        profile={profile}
-        onOpenAuth={() => setIsAuthOpen(true)}
-        onLogout={handleLogout}
-        isDarkMode={isDarkMode}
-        lang={lang}
-      />
-
-      {/* Main Panel Content */}
-      <main className="flex-1 flex flex-col min-h-0 min-w-0">
-        {activeTab === 'home' && (
-          <SocialFeed
-            mode="feed"
-            user={user}
-            profile={profile}
-            onOpenAuth={() => setIsAuthOpen(true)}
-            onSelectPost={setSelectedPost}
+      {/* --- MAIN CONTENT AREA --- */}
+      <main className="pb-24">
+        {view === 'feed' && (
+          <SocialFeed 
+            user={MOCK_USER}
+            profile={null}
+            onOpenAuth={() => alert("Open Auth")}
+            onSelectPost={(post) => setSelectedPost(post)} // This opens the Detail View
             isDarkMode={isDarkMode}
-            activeSearchQuery={activeSearchQuery}
-            setActiveSearchQuery={setActiveSearchQuery}
-            lang={lang}
+            activeSearchQuery={searchQuery}
+            setActiveSearchQuery={setSearchQuery}
+            lang="en"
           />
         )}
 
-        {activeTab === 'explore' && (
-          <Notifications
-            user={user}
+        {view === 'seller' && (
+          <SellerDashboard 
+            sellerPosts={[]} // In real app: filteredPosts.filter(p => p.user_id === user.uid)
             isDarkMode={isDarkMode}
-            lang={lang}
-            onOpenAuth={() => setIsAuthOpen(true)}
-            onSelectPost={setSelectedPost}
-            posts={[]} // Pass empty or populated posts
           />
         )}
 
-        {activeTab === 'messages' && (
-          <CommunityChat
-            user={user}
-            profile={profile}
-            onOpenAuth={() => setIsAuthOpen(true)}
+        {view === 'admin' && (
+          <AdminDashboard 
+            allPosts={[]} // In real app: fetch from DB
             isDarkMode={isDarkMode}
-            focusedRoomId={focusedRoomId}
-            focusedRoomName={focusedRoomName}
-            clearFocusedRoom={() => { setFocusedRoomId(null); setFocusedRoomName(null); }}
-            lang={lang}
-          />
-        )}
-
-        {activeTab === 'mentor' && (
-          <AIMentor isDarkMode={isDarkMode} lang={lang} />
-        )}
-
-        {activeTab === 'studio' && profile?.is_maker && (
-          <MakerStudio
-            user={user}
-            profile={profile}
-            isDarkMode={isDarkMode}
-            onPostShared={() => setActiveTab('home')}
-            lang={lang}
-          />
-        )}
-
-        {activeTab === 'settings' && (
-          <Settings
-            user={user}
-            profile={profile}
-            onProfileUpdated={handleReloadProfile}
-            isDarkMode={isDarkMode}
-            setIsDarkMode={setIsDarkMode}
-            onSelectPost={handleSelectPostFromSettings}
-            lang={lang}
           />
         )}
       </main>
 
-      {/* Pin Detail Overlay / Modal */}
+      {/* --- OVERLAYS --- */}
       {selectedPost && (
-        <PinDetailModal
+        <PostDetailView 
           post={selectedPost}
-          onClose={() => setSelectedPost(null)}
-          user={user}
-          profile={profile}
-          onOpenAuth={() => setIsAuthOpen(true)}
+          user={MOCK_USER}
           isDarkMode={isDarkMode}
-          onMessageMaker={handleMessageMaker}
-          lang={lang}
+          onClose={() => setSelectedPost(null)}
         />
       )}
-
-      {/* Account Authentication Overlay / Modal */}
-      <AuthModal
-        isOpen={isAuthOpen}
-        onClose={() => setIsAuthOpen(false)}
-        isDarkMode={isDarkMode}
-      />
-      
     </div>
   );
 }
