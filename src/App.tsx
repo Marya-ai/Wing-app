@@ -15,7 +15,7 @@ import Notifications from './components/Notifications';
 import AIMentor from './components/AIMentor'; 
 import MakerStudio from './components/MakerStudio'; 
 import AuthModal from './components/AuthModal';
-import Settings from './components/Settings'; // Added Settings component
+import Settings from './components/Settings'; 
 
 import { 
   Compass, LayoutDashboard, ShieldAlert, Moon, Sun, LogOut, 
@@ -29,13 +29,17 @@ export default function WingApp() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // --- NAVIGATION STATE ---
+  // --- NAVIGATION & UI STATE ---
   const [view, setView] = useState<string>('feed'); 
   const [isDarkMode, setIsDarkMode] = useState(true);
-  const [isMenuOpen, setIsMenuOpen] = useState(false); // Mobile Menu State
-  const [lang, setLang] = useState<'EN' | 'AM'>('EN'); // Language State
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  
+  // Language State - Now properly typed and connected
+  const [lang, setLang] = useState<'en' | 'am'>('en'); 
+  
   const [selectedPost, setSelectedPost] = useState<Post | null>(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
+  const [activeSearchQuery, setActiveSearchQuery] = useState('');
 
   // 1. LISTEN FOR AUTH & PROFILE
   useEffect(() => {
@@ -57,7 +61,6 @@ export default function WingApp() {
   }, []);
 
   const isAdmin = profile?.is_admin || user?.email === 'admin@wing.com';
-
   const toggleMenu = () => setIsMenuOpen(!isMenuOpen);
 
   if (loading) {
@@ -71,7 +74,7 @@ export default function WingApp() {
   return (
     <div className={`flex h-screen overflow-hidden ${isDarkMode ? 'bg-[#0A0A0A] text-white' : 'bg-[#FAF9F6] text-black'}`}>
       
-      {/* --- 1. RESPONSIVE SIDEBAR (HAMBURGER COMPATIBLE) --- */}
+      {/* --- 1. RESPONSIVE SIDEBAR --- */}
       <aside className={`
         fixed inset-y-0 left-0 z-[5000] w-72 transform transition-transform duration-300 ease-in-out border-r flex flex-col
         ${isMenuOpen ? 'translate-x-0' : '-translate-x-full'}
@@ -79,14 +82,16 @@ export default function WingApp() {
         ${isDarkMode ? 'bg-[#0F0F0F] border-gray-800' : 'bg-white border-gray-100'}
       `}>
         
-        {/* LOGO AREA (RESTORED BLUE WING STYLE) */}
+        {/* LOGO AREA - UPDATED TO USE PUBLIC FOLDER IMAGE */}
         <div className="p-10 flex items-center justify-between">
           <div className="flex items-center gap-3">
              <div className="relative">
-                {/* WING BLUE LOGO Placeholder - Replace src with your actual blue wing image */}
-                <div className="w-10 h-10 bg-[#E07A5F] rounded-2xl flex items-center justify-center shadow-lg">
-                  <Sparkles className="text-white w-6 h-6" />
-                </div>
+                {/* Points to /wing-logo.png in your public folder */}
+                <img 
+                  src="/wing-logo.png" 
+                  alt="Wing Logo" 
+                  className="w-10 h-10 object-contain drop-shadow-lg rotate-3 hover:rotate-0 transition-transform duration-500" 
+                />
              </div>
              <div>
                <h1 className="text-2xl font-black uppercase tracking-tighter text-[#E07A5F]">Wing</h1>
@@ -118,12 +123,14 @@ export default function WingApp() {
 
         {/* PROFILE & LANGUAGE FOOTER */}
         <div className="p-8 border-t dark:border-gray-800">
-           {/* Language Toggle */}
+           {/* Language Toggle - NOW CONNECTED TO GLOBAL STATE */}
            <button 
-             onClick={() => setLang(lang === 'EN' ? 'AM' : 'EN')}
-             className="w-full mb-6 flex items-center justify-center gap-2 py-2 rounded-xl bg-gray-100 dark:bg-white/5 border dark:border-gray-800 text-[9px] font-black uppercase tracking-widest"
+             onClick={() => setLang(lang === 'en' ? 'am' : 'en')}
+             className={`w-full mb-6 flex items-center justify-center gap-2 py-2 rounded-xl border transition-all ${
+               isDarkMode ? 'bg-white/5 border-gray-800 hover:bg-white/10' : 'bg-gray-100 border-gray-200 hover:bg-gray-200'
+             }`}
            >
-             <Globe size={12} /> {lang === 'EN' ? 'English' : 'አማርኛ'}
+             <Globe size={12} /> {lang === 'en' ? 'English' : 'አማርኛ'}
            </button>
 
            {user ? (
@@ -151,14 +158,14 @@ export default function WingApp() {
         </div>
       </aside>
 
-      {/* --- 2. THE MAIN CONTENT AREA --- */}
+      {/* --- 2. MAIN CONTENT AREA --- */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         
-        {/* MOBILE HEADER (Logo fixed at top for mobile/bot view) */}
+        {/* MOBILE HEADER */}
         <header className="lg:hidden flex items-center justify-between p-5 border-b dark:border-gray-800 bg-transparent">
            <button onClick={toggleMenu} className="p-2 rounded-xl bg-gray-100 dark:bg-white/5"><Menu size={20} /></button>
            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 bg-[#E07A5F] rounded-lg flex items-center justify-center font-black text-white text-xs">W</div>
+              <img src="/wing-logo.png" className="w-8 h-8 object-contain" alt="Wing" />
               <span className="font-black uppercase tracking-tighter text-sm">Wing</span>
            </div>
            <div className="w-10"></div>
@@ -166,9 +173,19 @@ export default function WingApp() {
 
         <main className="flex-1 overflow-y-auto relative">
           <div className="container mx-auto p-4">
-            {/* NO BLANK WHITE PAGES - ALL COMPONENTS MAPPED HERE */}
+            {/* FIXED: All views now pass required props to prevent blank screens */}
             {view === 'feed' && (
-              <SocialFeed user={user} profile={profile} onSelectPost={setSelectedPost} isDarkMode={isDarkMode} activeSearchQuery="" setActiveSearchQuery={() => {}} onOpenAuth={() => setShowAuthModal(true)} />
+              <SocialFeed 
+                user={user} 
+                profile={profile} 
+                onSelectPost={setSelectedPost} 
+                isDarkMode={isDarkMode} 
+                activeSearchQuery={activeSearchQuery} 
+                setActiveSearchQuery={setActiveSearchQuery} 
+                onOpenAuth={() => setShowAuthModal(true)}
+                currentLang={lang}
+                setCurrentLang={setLang}
+              />
             )}
             
             {view === 'seller' && (
@@ -179,7 +196,6 @@ export default function WingApp() {
               isAdmin ? <AdminDashboard isDarkMode={isDarkMode} /> : <div className="p-20 text-center opacity-30 uppercase font-black tracking-widest text-xs">Access Restricted</div>
             )}
 
-            {/* YOUR STUDIO TOOLS (Mapped correctly to prevent blank pages) */}
             {view === 'notifications' && <Notifications user={user} isDarkMode={isDarkMode} />}
             {view === 'chat' && <CommunityChat user={user} isDarkMode={isDarkMode} />}
             {view === 'mentor' && <AIMentor user={user} isDarkMode={isDarkMode} />}
