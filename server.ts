@@ -25,14 +25,14 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-// --- 2. STATE MANAGEMENT (For Bot Conversations) ---
+// --- 2. STATE MANAGEMENT (Memory for Bot Flows) ---
 const userStates = new Map<string, { 
   mode: 'APPLY' | 'POST'; 
   step: number; 
   data: any 
 }>();
 
-// --- 3. DATABASE INITIALIZATION (Future-Proof Schema) ---
+// --- 3. DATABASE INITIALIZATION (With Auto-Patches) ---
 async function initDatabase() {
   const query = `
     CREATE TABLE IF NOT EXISTS users (
@@ -41,7 +41,7 @@ async function initDatabase() {
       username TEXT,
       email TEXT UNIQUE,
       password_hash TEXT,
-      role TEXT DEFAULT 'BUYER', -- ADMIN, SELLER, BUYER
+      role TEXT DEFAULT 'BUYER',
       trust_score INTEGER DEFAULT 0,
       craft_type TEXT,
       location TEXT,
@@ -50,16 +50,11 @@ async function initDatabase() {
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
-    -- Ensure columns exist for older DB versions
-    ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT;
-    ALTER TABLE users ADD COLUMN IF NOT EXISTS craft_type TEXT;
-    ALTER TABLE users ADD COLUMN IF NOT EXISTS location TEXT;
-
     CREATE TABLE IF NOT EXISTS posts (
       id SERIAL PRIMARY KEY,
-      user_id BIGINT REFERENCES users(telegram_id),
+      user_id BIGINT,
       caption TEXT,
-      image_url TEXT, -- This stores the Telegram file_id
+      image_url TEXT,
       price TEXT,
       category TEXT,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -70,9 +65,14 @@ async function initDatabase() {
       telegram_id TEXT,
       action TEXT,
       details JSONB,
-      severity TEXT, -- INFO, WARN, CRITICAL
+      severity TEXT,
       timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
+
+    -- Ensure all columns exist for existing databases
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'BUYER';
+    ALTER TABLE posts ADD COLUMN IF NOT EXISTS price TEXT;
   `;
   try {
     await pool.query(query);
@@ -98,17 +98,17 @@ async function sendTG(chatId: string | number, text: string) {
 async function startTelegramBotPolling() {
   if (!TELEGRAM_TOKEN) return;
   
-  // Clear any existing webhooks
+  // Reset Webhook to enable Polling
   try { await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/deleteWebhook`); } catch (e) {}
 
-  // AI Mentor Init
+  // AI Mentor Initialization (Safe-Start)
   let aiModel: any = null;
   try {
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
     aiModel = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-  } catch (e) { console.error("⚠️ AI Mentor failed to initialize."); }
+  } catch (e) { console.error("⚠️ AI Mentor foundation ready (Key pending)."); }
 
-  console.log(`🤖 WING Master Engine Active. Polling for Artisan interactions...`);
+  console.log(`🤖 WING Master Engine Active. Token: ${TELEGRAM_TOKEN.substring(0, 7)}...`);
   
   let offset = 0;
   while (true) {
@@ -126,95 +126,94 @@ async function startTelegramBotPolling() {
         const userId = msg.from.id.toString();
         const text = msg.text?.trim();
 
-        // Check/Register User in DB
+        // 🛡️ AUTHENTICATION / REGISTRATION
         let res = await pool.query('SELECT * FROM users WHERE telegram_id = $1', [userId]);
         let user = res.rows[0];
 
-        // --- COMMAND: /start ---
         if (text === "/start") {
           const role = (userId === ADMIN_ID) ? 'ADMIN' : 'BUYER';
           if (!user) {
             await pool.query('INSERT INTO users (telegram_id, username, role, telegram_chat_id) VALUES ($1, $2, $3, $4)', 
             [userId, msg.from.username || 'Artisan', role, chatId.toString()]);
           }
-          await sendTG(chatId, `🦅 *Welcome to WING Artisan Alliance*\n\nYour Role: \`${user?.role || role}\` \nStatus: Verified ✅\n\n*Commands:*\n/apply - Become a Seller\n/post - Upload Craft\n/ask [question] - AI Mentor\n/status - My Profile`);
+          await sendTG(chatId, `🦅 *Welcome to WING Artisan Alliance*\n\nYour Role: \`${user?.role || role}\` \nStatus: Verified ✅\n\n/apply - Become a Seller\n/post - Upload Craft\n/status - My Profile\n/ask - AI Mentor`);
           continue;
         }
 
-        // --- COMMAND: /ask (AI Mentor) ---
-        if (text?.startsWith("/ask ")) {
-          if (!aiModel) { await sendTG(chatId, "⚠️ AI Mentor is offline."); continue; }
-          const prompt = text.replace("/ask ", "");
-          await sendTG(chatId, "💡 *Wing Guide is analyzing...*");
-          try {
-            const result = await aiModel.generateContent(`You are Wing Guide, a mentor for Ethiopian artisans. Help with: ${prompt}`);
-            await sendTG(chatId, `📖 *Artisan Advice:*\n\n${result.response.text()}`);
-          } catch (e) { await sendTG(chatId, "⚠️ AI limit reached. Try later."); }
-          continue;
-        }
-
-        // --- COMMAND: /apply (Gatekeeper) ---
+        // 🎨 ARTISAN ONBOARDING (/apply)
         if (text === "/apply") {
           if (user?.role === 'SELLER') return sendTG(chatId, "✅ You are already a verified Seller.");
           userStates.set(userId, { mode: 'APPLY', step: 1, data: {} });
-          await sendTG(chatId, "🎨 *Artisan Application*\n\nStep 1: What type of craft do you specialize in?");
+          await sendTG(chatId, "🎨 *Artisan Application*\nStep 1: What do you make? (e.g., Crochet, Jewelry)");
           continue;
         }
 
-        // --- COMMAND: /post (Gallery Upload) ---
+        // 📸 PRODUCT POSTING (/post)
         if (text === "/post") {
           if (user?.role !== 'SELLER' && user?.role !== 'ADMIN') return sendTG(chatId, "⚠️ Only Verified Sellers can post. Use /apply.");
           userStates.set(userId, { mode: 'POST', step: 1, data: {} });
-          await sendTG(chatId, "📸 *Gallery Post*\n\nStep 1: Send a photo of your masterpiece.");
+          await sendTG(chatId, "📸 *Gallery Post*\nStep 1: Send a clear photo of your masterpiece.");
           continue;
         }
 
-        // --- HANDLE MULTI-STEP FLOWS ---
+        // 💡 AI MENTOR (/ask)
+        if (text?.startsWith("/ask ")) {
+          const prompt = text.replace("/ask ", "");
+          await sendTG(chatId, "💡 *Wing Guide is thinking...*");
+          try {
+            const result = await aiModel.generateContent(prompt);
+            await sendTG(chatId, `📖 *Artisan Advice:*\n\n${result.response.text()}`);
+          } catch (e) { await sendTG(chatId, "⚠️ AI is currently busy. Please try again later."); }
+          continue;
+        }
+
+        // ⚙️ HANDLE MULTI-STEP CONVERSATIONS
         const state = userStates.get(userId);
         if (state) {
-          // A. APPLY FLOW
-          if (state.mode === 'APPLY') {
-            if (state.step === 1 && text) {
+          // POST FLOW
+          if (state.mode === 'POST') {
+            if (state.step === 1 && msg.photo) {
+              state.data.image = msg.photo[msg.photo.length - 1].file_id;
+              state.step = 2;
+              await sendTG(chatId, "💰 Step 2: Price in ETB?");
+            } else if (state.step === 2) {
+              state.data.price = text;
+              state.step = 3;
+              await sendTG(chatId, "📝 Step 3: Short description?");
+            } else if (state.step === 3) {
+              try {
+                await pool.query('INSERT INTO posts (user_id, caption, image_url, price) VALUES ($1, $2, $3, $4)', 
+                [userId, text, state.data.image, state.data.price]);
+                await sendTG(chatId, "✅ *Masterpiece Published!*\nView it here: https://wing-artisan-bot.onrender.com/api/gallery");
+                userStates.delete(userId);
+              } catch (err) { console.error("Post Insert Failed", err); }
+            }
+          }
+          // APPLY FLOW
+          else if (state.mode === 'APPLY') {
+            if (state.step === 1) {
               state.data.craft = text; state.step = 2;
-              await sendTG(chatId, "📍 Step 2: Workshop location? (City/Region)");
-            } else if (state.step === 2 && text) {
+              await sendTG(chatId, "📍 Step 2: Workshop location?");
+            } else if (state.step === 2) {
               state.data.loc = text; state.step = 3;
-              await sendTG(chatId, "📸 Step 3: Send a photo of your work for verification.");
+              await sendTG(chatId, "📸 Step 3: Photo of your work?");
             } else if (state.step === 3 && msg.photo) {
               await sendTG(chatId, "⏳ *Application Submitted!* Admin will review soon.");
               await sendTG(ADMIN_ID, `🔔 *NEW APP*\nUser: @${msg.from.username}\nCraft: ${state.data.craft}\n/verify_${userId}`);
               userStates.delete(userId);
             }
           }
-          // B. POST FLOW
-          else if (state.mode === 'POST') {
-            if (state.step === 1 && msg.photo) {
-              state.data.image = msg.photo[msg.photo.length - 1].file_id;
-              state.step = 2;
-              await sendTG(chatId, "💰 Step 2: Price in ETB?");
-            } else if (state.step === 2 && text) {
-              state.data.price = text; state.step = 3;
-              await sendTG(chatId, "📝 Step 3: Short description?");
-            } else if (state.step === 3 && text) {
-              await pool.query('INSERT INTO posts (user_id, caption, image_url, price) VALUES ($1, $2, $3, $4)', 
-                [userId, text, state.data.image, state.data.price]);
-              await sendTG(chatId, "✅ *Masterpiece Published!*");
-              userStates.delete(userId);
-            }
-          }
           continue;
         }
 
-        // --- COMMAND: /verify_ID (Admin Only) ---
+        // 🛡️ ADMIN COMMANDS
         if (text?.startsWith("/verify_") && userId === ADMIN_ID) {
           const targetId = text.split("_")[1];
           await pool.query("UPDATE users SET role = 'SELLER' WHERE telegram_id = $1", [targetId]);
-          await sendTG(targetId, "🎉 Approved! You are now a *Verified Seller*.");
-          await sendTG(ADMIN_ID, `✅ User ${targetId} is now a SELLER.`);
-          continue;
+          await sendTG(targetId, "🎉 Approved! You are now a *Verified WING Seller*.");
+          await sendTG(ADMIN_ID, `✅ User ${targetId} promoted.`);
         }
 
-        // --- COMMAND: /status ---
         if (text === "/status") {
           await sendTG(chatId, `📊 *Profile Status*\nRole: \`${user?.role || 'BUYER'}\`\nTrust: \`${user?.trust_score || 0}\``);
         }
@@ -223,17 +222,22 @@ async function startTelegramBotPolling() {
   }
 }
 
-// --- 6. WEBSITE API ENDPOINTS (MIRROR SYSTEM) ---
+// --- 6. WEBSITE API ENDPOINTS ---
 
-// Public Search & Gallery
+// The Pinterest-style Gallery Data
 app.get("/api/gallery", async (req, res) => {
   try {
-    const posts = await pool.query('SELECT posts.*, users.username FROM posts JOIN users ON posts.user_id = users.telegram_id ORDER BY created_at DESC');
+    const posts = await pool.query(`
+      SELECT posts.*, users.username 
+      FROM posts 
+      LEFT JOIN users ON posts.user_id = users.telegram_id 
+      ORDER BY created_at DESC
+    `);
     res.json(posts.rows);
-  } catch (err) { res.status(500).json({ error: "Failed to fetch gallery" }); }
+  } catch (err) { res.status(500).json([]); }
 });
 
-// Login for future dashboard
+// Admin Login
 app.post("/api/auth/login", async (req, res) => {
   const { email, password } = req.body;
   try {
@@ -242,7 +246,7 @@ app.post("/api/auth/login", async (req, res) => {
     if (user && user.password_hash && await bcrypt.compare(password, user.password_hash)) {
       const token = jwt.sign({ id: user.id, role: user.role }, JWT_SECRET, { expiresIn: '24h' });
       res.json({ token, user: { username: user.username, role: user.role } });
-    } else { res.status(401).json({ error: "Invalid credentials" }); }
+    } else { res.status(401).json({ error: "Invalid" }); }
   } catch (err) { res.status(500).send("Error"); }
 });
 
