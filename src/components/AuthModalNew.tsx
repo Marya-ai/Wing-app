@@ -19,17 +19,25 @@ export default function AuthModal({ isOpen, onClose, onLoginSuccess }: AuthModal
       setMounted(true);
       document.body.style.overflow = 'hidden';
     } else {
-      const timer = setTimeout(() => setMounted(false), 300);x
+      const timer = setTimeout(() => setMounted(false), 300); // FIXED: Removed stray 'x' here
       document.body.style.overflow = '';
       return () => clearTimeout(timer);
     }
   }, [isOpen]);
 
   const [formData, setFormData] = useState({
-    email: '', password: '', fullName: '', username: '', isMaker: false,
+    email: '', 
+    password: '', 
+    fullName: '', 
+    username: '', 
+    isMaker: false,
     businessScale: 'small' as 'small' | 'medium' | 'large', 
-    tgWallet: '', minEarning: '', maxEarning: '',
-    companyName: '', tiktok: '', website: ''
+    tgWallet: '', 
+    minEarning: '', 
+    maxEarning: '',
+    companyName: '', 
+    tiktok: '', 
+    website: ''
   });
 
   if (!mounted && !isOpen) return null;
@@ -40,9 +48,14 @@ export default function AuthModal({ isOpen, onClose, onLoginSuccess }: AuthModal
     setError(null);
 
     try {
+      // NOTE: Update these URLs to match your deployed Render backend URL
+      const API_BASE = process.env.NODE_ENV === 'production' 
+        ? 'https://wing-artisan-bot.onrender.com' 
+        : 'http://localhost:3000';
+
       const endpoint = isRegistering 
-        ? 'http://localhost:3000/api/auth/register'
-        : 'http://localhost:3000/api/auth/login';
+        ? `${API_BASE}/api/auth/register`
+        : `${API_BASE}/api/auth/login`;
 
       const payload = isRegistering
         ? {
