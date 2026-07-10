@@ -13,10 +13,10 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
-// --- 1. CONFIGURATION & ROBUSTNESS ---
+// --- 1. CONFIGURATION & SECURITY ---
 const PORT = process.env.PORT || 10000;
 const JWT_SECRET = process.env.JWT_ACCESS_SECRET || "wing-secure-secret-2024";
-const ADMIN_ID = process.env.ADMIN_ID; // Your TG ID from Render Env
+const ADMIN_ID = process.env.ADMIN_ID; // Your TG ID: 8360912681
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || "";
 
 // Initialize Postgres with SSL for Render
@@ -25,21 +25,24 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-// --- 2. DATABASE INITIALIZATION ---
+// --- 2. DATABASE INITIALIZATION (With Column Patch) ---
 async function initDatabase() {
   const query = `
     CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,
       telegram_id BIGINT UNIQUE,
-      username TEXT,
       email TEXT UNIQUE,
       password_hash TEXT,
-      role TEXT DEFAULT 'BUYER',
+      full_name TEXT,
+      role TEXT DEFAULT 'BUYER', -- ADMIN, SELLER, BUYER
       trust_score INTEGER DEFAULT 0,
       telegram_chat_id TEXT,
       is_blocked BOOLEAN DEFAULT FALSE,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
+
+    -- PATCH: Ensure the username column exists (Fixes the current error)
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT;
 
     CREATE TABLE IF NOT EXISTS posts (
       id SERIAL PRIMARY KEY,
@@ -62,13 +65,13 @@ async function initDatabase() {
   `;
   try {
     await pool.query(query);
-    console.log("🛡️ Guardian System: PostgreSQL Tables Verified.");
+    console.log("🛡️ Guardian System: PostgreSQL Tables Verified & Patched.");
   } catch (err) {
     console.error("❌ DB Init Error:", err);
   }
 }
 
-// --- 3. GUARDIAN LOGGING ---
+// --- 3. GUARDIAN LOGGING SYSTEM ---
 async function logGuardianEvent(type: string, details: any, severity: string = "INFO") {
   try {
     await pool.query(
@@ -80,7 +83,7 @@ async function logGuardianEvent(type: string, details: any, severity: string = "
   }
 }
 
-// --- 4. AUTHENTICATION MIDDLEWARE ---
+// --- 4. AUTHENTICATION & RBAC MIDDLEWARE ---
 function authenticateToken(req: any, res: any, next: any) {
   const authHeader = req.headers["authorization"];
   const token = authHeader && authHeader.split(" ")[1];
@@ -117,19 +120,19 @@ async function sendTelegramMessage(chatId: string | number, text: string) {
   }
 }
 
-// --- 6. TELEGRAM BOT POLLING (Hardened) ---
+// --- 6. TELEGRAM BOT ENGINE (Polling Mode) ---
 async function startTelegramBotPolling() {
   if (!TELEGRAM_TOKEN) {
     console.error("❌ Telegram Token missing! Bot will not start.");
     return;
   }
 
-  // FORCE RESET: Deletes any old Webhooks that make the bot silent
+  // FORCE RESET: Clears old webhooks to ensure polling works immediately
   try {
     await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/deleteWebhook`);
     console.log("🧹 Guardian: Webhook cleared. Polling mode activated.");
   } catch (e) {
-    console.warn("⚠️ Failed to clear webhook, but continuing...");
+    console.warn("⚠️ Webhook clear skipped.");
   }
 
   console.log(`🤖 WING Guardian active. Token: ${TELEGRAM_TOKEN.substring(0, 5)}...`);
@@ -142,7 +145,7 @@ async function startTelegramBotPolling() {
       
       if (!data.ok) {
         console.error("❌ Telegram API Error:", data.description);
-        await new Promise(r => setTimeout(r, 10000)); // Cool down
+        await new Promise(r => setTimeout(r, 10000));
         continue;
       }
 
@@ -164,10 +167,14 @@ async function startTelegramBotPolling() {
             let user = res.rows[0];
 
             if (!user) {
-                // If the user's ID matches your ADMIN_ID env var, make them ADMIN
+                // Determine role based on ADMIN_ID environment variable
                 const role = (userId === ADMIN_ID) ? 'ADMIN' : 'BUYER';
-                await pool.query('INSERT INTO users (telegram_id, username, role, telegram_chat_id) VALUES ($1, $2, $3, $4)', 
-                [userId, msg.from.username || 'Artisan', role, chatId.toString()]);
+                
+                await pool.query(
+                  'INSERT INTO users (telegram_id, username, role, telegram_chat_id) VALUES ($1, $2, $3, $4)', 
+                  [userId, msg.from.username || 'Artisan', role, chatId.toString()]
+                );
+                
                 await sendTelegramMessage(chatId, `👋 *Welcome to WING!* \n\nYour account is now registered as: \`${role}\` \nStatus: Verified ✅`);
             } else {
                 await sendTelegramMessage(chatId, `🦅 *Welcome back, Artisan.* \nRole: \`${user.role}\` \nStatus: Secure 🛡️`);
@@ -190,14 +197,15 @@ async function startTelegramBotPolling() {
   }
 }
 
-// --- 7. API ENDPOINTS ---
+// --- 7. API ENDPOINTS (FOR WEBSITE) ---
 
+// Login
 app.post("/api/auth/login", async (req, res) => {
   const { email, password } = req.body;
   try {
     const userRes = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
     const user = userRes.rows[0];
-    if (user && await bcrypt.compare(password, user.password_hash)) {
+    if (user && user.password_hash && await bcrypt.compare(password, user.password_hash)) {
       const token = jwt.sign({ id: user.id, role: user.role, email: user.email }, JWT_SECRET, { expiresIn: '2h' });
       res.json({ accessToken: token, user });
     } else {
@@ -207,6 +215,7 @@ app.post("/api/auth/login", async (req, res) => {
   } catch (err) { res.status(500).send("Server Error"); }
 });
 
+// AI Mentor (Gemini)
 const genAI = new GoogleGenAI(process.env.GEMINI_API_KEY || "");
 app.post("/api/mentor", authenticateToken, async (req, res) => {
   try {
@@ -217,6 +226,7 @@ app.post("/api/mentor", authenticateToken, async (req, res) => {
   } catch (err) { res.status(500).json({ error: "AI Mentor offline" }); }
 });
 
+// Create Post (Seller/Admin Only)
 app.post("/api/posts", authenticateToken, requireRole("SELLER", "ADMIN"), async (req: any, res) => {
   const { caption, image_url, category, price } = req.body;
   try {
@@ -228,9 +238,17 @@ app.post("/api/posts", authenticateToken, requireRole("SELLER", "ADMIN"), async 
   } catch (err) { res.status(500).json({ error: "Post creation failed" }); }
 });
 
+// Admin Logs
+app.get("/api/admin/fraud-logs", authenticateToken, requireRole("ADMIN"), async (req, res) => {
+  try {
+    const logs = await pool.query('SELECT * FROM security_logs ORDER BY timestamp DESC LIMIT 50');
+    res.json(logs.rows);
+  } catch (err) { res.status(500).send("Error fetching logs"); }
+});
+
 // --- 8. SERVER STARTUP ---
 async function startServer() {
-  console.log("🚀 Starting WING Backend...");
+  console.log("🚀 Starting WING Backend Engine...");
   await initDatabase();
   
   // Start bot polling
