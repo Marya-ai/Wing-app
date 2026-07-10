@@ -1,15 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { X, Mail, Lock, User, Wallet, Building2, Globe, TrendingUp, Info, ArrowRight, Sparkles } from 'lucide-react';
-import { auth, db } from '../lib/firebase';
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword, updateProfile } from 'firebase/auth';
-import { doc, setDoc } from 'firebase/firestore';
 
 interface AuthModalProps {
   isOpen: boolean;
   onClose: () => void;
+  onLoginSuccess: (user: any, token: string) => void;
 }
 
-export default function AuthModal({ isOpen, onClose }: AuthModalProps) {
+export default function AuthModal({ isOpen, onClose, onLoginSuccess }: AuthModalProps) {
   const [isRegistering, setIsRegistering] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -21,7 +19,7 @@ export default function AuthModal({ isOpen, onClose }: AuthModalProps) {
       setMounted(true);
       document.body.style.overflow = 'hidden';
     } else {
-      const timer = setTimeout(() => setMounted(false), 300);
+      const timer = setTimeout(() => setMounted(false), 300);x
       document.body.style.overflow = '';
       return () => clearTimeout(timer);
     }
@@ -42,32 +40,41 @@ export default function AuthModal({ isOpen, onClose }: AuthModalProps) {
     setError(null);
 
     try {
-      if (isRegistering) {
-        const res = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
-        await updateProfile(res.user, { displayName: formData.fullName });
+      const endpoint = isRegistering 
+        ? 'http://localhost:3000/api/auth/register'
+        : 'http://localhost:3000/api/auth/login';
 
-        await setDoc(doc(db, 'profiles', res.user.uid), {
-          uid: res.user.uid,
-          full_name: formData.fullName,
-          username: formData.username.toLowerCase(),
-          email: formData.email,
-          is_maker: formData.isMaker,
-          business_details: {
-            scale: formData.businessScale,
-            commission: formData.businessScale === 'large' ? '25%' : formData.businessScale === 'medium' ? '15%' : '10%',
-            tg_wallet: formData.tgWallet,
-            earnings: `${formData.minEarning}-${formData.maxEarning} ETB`,
-            company: formData.companyName,
-            tiktok: formData.tiktok,
-            website: formData.website
-          },
-          registered_on: 'website',
-          created_at: new Date().toISOString()
-        });
-      } else {
-        await signInWithEmailAndPassword(auth, formData.email, formData.password);
+      const payload = isRegistering
+        ? {
+            email: formData.email,
+            password: formData.password,
+            full_name: formData.fullName,
+            role: formData.isMaker ? 'seller' : 'buyer'
+          }
+        : {
+            email: formData.email,
+            password: formData.password
+          };
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Authentication failed');
       }
+
+      // Store JWT token
+      localStorage.setItem('wing_access_token', data.accessToken);
+
+      // Notify parent component
+      onLoginSuccess(data.user, data.accessToken);
       onClose();
+
     } catch (err: any) { 
       setError(err.message || 'An unexpected error occurred.'); 
     } finally { 

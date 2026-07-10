@@ -1,25 +1,90 @@
 import { 
-  collection, 
-  doc, 
-  getDocs, 
-  addDoc, 
-  setDoc, 
-  updateDoc, 
-  query, 
-  where, 
-  orderBy, 
-  onSnapshot, 
-  increment,
-  getDoc,
-  limit,
-  writeBatch,
-  serverTimestamp
+  collection, doc, getDocs, addDoc, setDoc, updateDoc, 
+  query, where, orderBy, onSnapshot, increment, 
+  getDoc, limit, writeBatch, serverTimestamp 
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { Post, Comment, Save, DailyLog, ChatRoom, Message, UserProfile, Notification } from '../types';
 
-// --- SEEDING & INITIALIZATION ---
+// --- SECURITY CONFIGURATION ---
+const API_BASE = process.env.NODE_ENV === 'production' 
+  ? 'https://wing-api.onrender.com' 
+  : 'http://localhost:5000';
 
+// --- GUARDIAN BOT LOGGING (CLIENT-SIDE) ---
+async function logClientSecurityEvent(type: string, details: any) {
+  if (process.env.NODE_ENV !== 'development') return; // Only log in dev for now
+  
+  console.warn(`🚨 CLIENT SECURITY EVENT [${type}]:`, details);
+  
+  // In production, this would send to a secure logging endpoint
+  try {
+    await fetch(`${API_BASE}/api/guardian/log`, {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${localStorage.getItem('wing_access_token')}`
+      },
+      body: JSON.stringify({ type, details, timestamp: new Date().toISOString() })
+    }).catch(() => {}); // Fail silently
+  } catch (e) {}
+}
+
+// --- AUTHENTICATED FETCH HELPER ---
+async function authenticatedFetch(endpoint: string, options: RequestInit = {}) {
+  const token = localStorage.getItem('wing_access_token');
+  
+  if (!token) {
+    logClientSecurityEvent('MISSING_TOKEN', { endpoint });
+    throw new Error('Authentication required. Please log in.');
+  }
+
+  const response = await fetch(`${API_BASE}${endpoint}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+      ...options.headers
+    }
+  });
+
+  if (response.status === 401 || response.status === 403) {
+    logClientSecurityEvent('AUTH_FAILURE', { endpoint, status: response.status });
+    localStorage.removeItem('wing_access_token');
+    window.location.reload(); // Force re-auth
+    throw new Error('Session expired. Please log in again.');
+  }
+
+  if (!response.ok) {
+    throw new Error(`API Error: ${response.statusText}`);
+  }
+
+  return response.json();
+}
+
+// --- TELEGRAM WEBAPP INITDATA VALIDATION ---
+export async function validateTelegramInitData(initData: string): Promise<{ user: UserProfile; token: string }> {
+  try {
+    const response = await fetch(`${API_BASE}/api/auth/telegram-validate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ initData })
+    });
+
+    if (!response.ok) {
+      throw new Error('Telegram validation failed');
+    }
+
+    const data = await response.json();
+    localStorage.setItem('wing_access_token', data.token);
+    return data;
+  } catch (err) {
+    logClientSecurityEvent('TELEGRAM_VALIDATION_FAILED', { error: err });
+    throw err;
+  }
+}
+
+// --- SEEDING & INITIALIZATION ---
 export async function seedDatabaseIfEmpty() {
   try {
     const postsCol = collection(db, 'posts');
@@ -31,8 +96,8 @@ export async function seedDatabaseIfEmpty() {
 
       // 1. Seed public chat rooms
       const chatRooms = [
-        { id: 'textiles-fiber', name: ' Textiles & Fiber Arts', type: 'public', created_at: new Date().toISOString() },
-        { id: 'woodwork', name: ' Woodwork', type: 'public', created_at: new Date().toISOString() },
+        { id: 'textiles-fiber', name: '🧵 Textiles & Fiber Arts', type: 'public', created_at: new Date().toISOString() },
+        { id: 'woodwork', name: '🪵 Woodwork', type: 'public', created_at: new Date().toISOString() },
         { id: 'ceramics-pottery', name: '🪔 Ceramics & Pottery', type: 'public', created_at: new Date().toISOString() },
         { id: 'jewelry-accessories', name: '💍 Jewelry & Accessories', type: 'public', created_at: new Date().toISOString() },
         { id: 'crochet-knitting', name: '🧶 Crochet & Knitting', type: 'public', created_at: new Date().toISOString() },
@@ -41,9 +106,9 @@ export async function seedDatabaseIfEmpty() {
         { id: 'painting-visual', name: '🎨 Painting & Visual Arts', type: 'public', created_at: new Date().toISOString() },
         { id: 'home-decor-crafts', name: '🪑 Home Décor Crafts', type: 'public', created_at: new Date().toISOString() },
         { id: 'basketry-natural', name: '🧺 Basketry & Natural Fiber', type: 'public', created_at: new Date().toISOString() },
-        { id: 'cultural-traditional', name: '🪆 Cultural & Traditional', type: 'public', created_at: new Date().toISOString() },
-        { id: 'handmade-toys', name: '🧸 Handmade Toys', type: 'public', created_at: new Date().toISOString() },
-        { id: 'lifestyle-crafts', name: '🕯️ Lifestyle Crafts', type: 'public', created_at: new Date().toISOString() },
+        { id: 'cultural-traditional', name: ' Cultural & Traditional', type: 'public', created_at: new Date().toISOString() },
+        { id: 'handmade-toys', name: ' Handmade Toys', type: 'public', created_at: new Date().toISOString() },
+        { id: 'lifestyle-crafts', name: '️ Lifestyle Crafts', type: 'public', created_at: new Date().toISOString() },
         { id: 'general-chat', name: '💬 General Discussion', type: 'public', created_at: new Date().toISOString() },
         { id: 'showcase', name: '✨ Craft Showcase', type: 'public', created_at: new Date().toISOString() },
       ];
@@ -54,7 +119,7 @@ export async function seedDatabaseIfEmpty() {
         const welcomeMsg = {
           room_id: room.id,
           user_id: 'wing-guide',
-          username: 'Wing Guide ',
+          username: 'Wing Guide 🤖',
           avatar_url: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&q=80&w=150',
           content: `Welcome to the ${room.name} guild! Share your progress, ask for technique advice, or showcase your latest masterpieces!`,
           created_at: new Date().toISOString()
@@ -147,7 +212,7 @@ export async function seedDatabaseIfEmpty() {
           user_id: 'maker-rowan',
           username: 'Rowan Birchwood',
           avatar_url: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=150',
-          content: 'That cobalt speckled gaze is magnificent Elena! Looking forward to seeing the final gloss after kiln firing.',
+          content: 'That cobalt speckled glaze is magnificent Elena! Looking forward to seeing the final gloss after kiln firing.',
           created_at: new Date(Date.now() - 3600000 * 3).toISOString()
         },
         {
@@ -163,6 +228,8 @@ export async function seedDatabaseIfEmpty() {
       for (const comm of sampleComments) {
         await addDoc(collection(db, 'posts', comm.post_id, 'comments'), comm);
       }
+      
+      console.log("✅ Database seeding complete!");
     }
   } catch (error) {
     console.warn("Silent failure during database seeding.", error);
@@ -170,7 +237,6 @@ export async function seedDatabaseIfEmpty() {
 }
 
 // --- PROFILE SERVICES ---
-
 export async function getProfile(uid: string): Promise<UserProfile | null> {
   const profileDoc = await getDoc(doc(db, 'profiles', uid));
   return profileDoc.exists() ? (profileDoc.data() as UserProfile) : null;
@@ -191,7 +257,6 @@ export async function createOrUpdateProfile(uid: string, profile: Partial<UserPr
 }
 
 // --- POSTS SERVICES ---
-
 export async function fetchAllPosts(): Promise<Post[]> {
   const querySnapshot = await getDocs(query(collection(db, 'posts'), orderBy('created_at', 'desc')));
   const posts: Post[] = [];
@@ -218,7 +283,6 @@ export async function incrementLikes(postId: string): Promise<void> {
 }
 
 // --- COMMENTS & NOTIFICATION SERVICES ---
-
 export async function fetchComments(postId: string): Promise<Comment[]> {
   const querySnapshot = await getDocs(
     query(collection(db, 'posts', postId, 'comments'), orderBy('created_at', 'asc'))
@@ -230,10 +294,6 @@ export async function fetchComments(postId: string): Promise<Comment[]> {
   return comments;
 }
 
-/**
- * Adds a comment AND triggers a notification to the post author.
- * Prevents self-notifications and handles missing author data gracefully.
- */
 export async function addComment(postId: string, commentData: Omit<Comment, 'id' | 'created_at'>): Promise<void> {
   const batch = writeBatch(db);
   
@@ -254,7 +314,6 @@ export async function addComment(postId: string, commentData: Omit<Comment, 'id'
     if (postSnap.exists()) {
       const postData = postSnap.data() as Post;
       
-      // Only notify if commenter != author
       if (postData.user_id && postData.user_id !== commentData.user_id) {
         const notifRef = doc(collection(db, 'notifications'));
         batch.set(notifRef, {
@@ -272,14 +331,12 @@ export async function addComment(postId: string, commentData: Omit<Comment, 'id'
     }
   } catch (err) {
     console.error("Failed to prepare comment notification:", err);
-    // Don't fail the comment if notification prep fails
   }
 
   await batch.commit();
 }
 
 // --- SAVES / COLLECTION SERVICES ---
-
 export async function savePostToBoard(userId: string, postId: string, boardName: string = 'Default'): Promise<void> {
   const id = `${userId}_${postId}`;
   await setDoc(doc(db, 'saves', id), {
@@ -313,7 +370,6 @@ export async function fetchSavesDetailed(userId: string): Promise<Save[]> {
 }
 
 // --- DAILY LOGS SERVICES (MAKER STUDIO) ---
-
 export async function fetchDailyLog(userId: string, dateStr: string): Promise<DailyLog | null> {
   const q = query(
     collection(db, 'daily_logs'),
@@ -338,15 +394,9 @@ export async function saveDailyLog(logData: Omit<DailyLog, 'id' | 'created_at'>)
   }, { merge: true });
 }
 
-// --- STREAK SERVICE (NEW FOR FEED) ---
-
-/**
- * Calculates current streak based on consecutive days with activity.
- * Activity = posted craft OR saved daily log
- */
+// --- STREAK SERVICE ---
 export async function calculateUserStreak(userId: string): Promise<{ streak: number; lastActiveDate: string | null }> {
   try {
-    // Get user's posts sorted by date desc
     const postsQ = query(
       collection(db, 'posts'),
       where('user_id', '==', userId),
@@ -354,7 +404,6 @@ export async function calculateUserStreak(userId: string): Promise<{ streak: num
     );
     const postsSnap = await getDocs(postsQ);
     
-    // Get user's daily logs sorted by date desc  
     const logsQ = query(
       collection(db, 'daily_logs'),
       where('user_id', '==', userId),
@@ -362,28 +411,20 @@ export async function calculateUserStreak(userId: string): Promise<{ streak: num
     );
     const logsSnap = await getDocs(logsQ);
 
-    // Combine all activity dates
     const activityDates = new Set<string>();
     
     postsSnap.forEach(doc => {
       const data = doc.data() as Post;
-      if (data.created_at) {
-        activityDates.add(data.created_at.split('T')[0]);
-      }
+      if (data.created_at) activityDates.add(data.created_at.split('T')[0]);
     });
     
     logsSnap.forEach(doc => {
       const data = doc.data() as DailyLog;
-      if (data.date_str) {
-        activityDates.add(data.date_str);
-      }
+      if (data.date_str) activityDates.add(data.date_str);
     });
 
-    if (activityDates.size === 0) {
-      return { streak: 0, lastActiveDate: null };
-    }
+    if (activityDates.size === 0) return { streak: 0, lastActiveDate: null };
 
-    // Sort dates descending and calculate consecutive streak
     const sortedDates = Array.from(activityDates).sort((a, b) => b.localeCompare(a));
     let streak = 1;
     let currentDate = new Date(sortedDates[0] + 'T00:00:00');
@@ -408,7 +449,6 @@ export async function calculateUserStreak(userId: string): Promise<{ streak: num
 }
 
 // --- REALTIME CHAT SERVICES ---
-
 export function listenToRoomMessages(roomId: string, callback: (messages: Message[]) => void) {
   const q = query(
     collection(db, 'chat_rooms', roomId, 'messages'),
@@ -437,14 +477,14 @@ export async function sendMessage(roomId: string, messageData: Omit<Message, 'id
       if (recipientId) {
         const recipientProfile = await getProfile(recipientId);
         if (recipientProfile && recipientProfile.telegram_chat_id) {
-          fetch('/api/telegram/send', {
+          // Use authenticated fetch for Telegram dispatch
+          await authenticatedFetch('/api/telegram/send', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               chatId: recipientProfile.telegram_chat_id,
-              text: `💬 *New WING message from ${messageData.username}*:\n\n"${messageData.content}"\n\n🔗 _Open the WING application to reply!_`
+              text: ` *New WING message from ${messageData.username}*:\n\n"${messageData.content}"\n\n _Open the WING application to reply!_`
             })
-          }).catch(err => console.error("Error dispatching Telegram message alert:", err));
+          });
         }
       }
     } catch (err) {
@@ -492,7 +532,6 @@ export async function fetchPrivateChatRooms(userId: string): Promise<ChatRoom[]>
 }
 
 // --- NOTIFICATION SERVICES ---
-
 export async function createNotification(notificationData: Omit<Notification, 'id' | 'created_at' | 'read'>): Promise<void> {
   const notifCol = collection(db, 'notifications');
   await addDoc(notifCol, {
@@ -503,13 +542,37 @@ export async function createNotification(notificationData: Omit<Notification, 'i
 }
 
 // --- SECURE BUY FLOW HELPER ---
-
-/**
- * Generates a secure Telegram deep link for purchasing.
- * Payment is verified by bot BEFORE revealing maker contact info.
- * Commission is automatically deducted by the bot.
- */
 export function generateSecureBuyLink(postId: string, buyerUserId: string, botUsername: string = 'mari_beeee'): string {
   const startParam = `buy_${postId}_${buyerUserId}`;
   return `https://t.me/${botUsername}?start=${startParam}`;
+}
+
+// --- AI MENTOR SERVICE (PROTECTED) ---
+export async function getMentorResponse(messages: { role: string; content: string }[]): Promise<string> {
+  const data = await authenticatedFetch('/api/mentor', {
+    method: 'POST',
+    body: JSON.stringify({ messages })
+  });
+  return data.text;
+}
+
+// --- VOICE GENERATION SERVICE (PROTECTED) ---
+export async function generateVoice(text: string, voiceName: string = "Zephyr"): Promise<string> {
+  const data = await authenticatedFetch('/api/voice/generate', {
+    method: 'POST',
+    body: JSON.stringify({ text, voiceName })
+  });
+  return data.audio;
+}
+
+// --- LOGOUT SERVICE ---
+export async function logout(): Promise<void> {
+  localStorage.removeItem('wing_access_token');
+  // Optional: Call backend to invalidate refresh token
+  try {
+    await fetch(`${API_BASE}/api/auth/logout`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${localStorage.getItem('wing_access_token')}` }
+    }).catch(() => {});
+  } catch (e) {}
 }

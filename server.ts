@@ -3,315 +3,246 @@ import path from "path";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
-import { initializeApp } from "firebase/app";
-import { getFirestore, doc, getDoc, updateDoc, collection, addDoc, getDocs, query, where } from "firebase/firestore";
+import jwt from "jsonwebtoken";
+import bcrypt from "bcryptjs";
+import pkg from 'pg';
+const { Pool } = pkg;
 
 dotenv.config();
 
 const app = express();
 app.use(express.json());
 
-const PORT = 3000;
+// --- CONFIGURATION ---
+const PORT = process.env.PORT || 3000;
+const JWT_SECRET = process.env.JWT_ACCESS_SECRET || "wing-secure-secret-2024";
+const ADMIN_ID = process.env.ADMIN_ID; // From Render Env
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || "";
 
-// CORRECTED: Firebase configuration matching your new project: wing-app-55bc8
-const firebaseConfig = {
-  apiKey: "AIzaSyCdeRDZtCiQCSelwaP-y9xDycqAN5lRZio",
-  authDomain: "wing-app-55bc8.firebaseapp.com",
-  projectId: "wing-app-55bc8",
-  storageBucket: "wing-app-55bc8.firebasestorage.app",
-  messagingSenderId: "718269448738",
-  appId: "1:718269448738:web:d0edf63c9102360a85c07b",
-  measurementId: "G-ECH94GSHDS"
-};
+// --- POSTGRESQL CONNECTION ---
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
 
-const firebaseApp = initializeApp(firebaseConfig);
-const db = getFirestore(firebaseApp);
+// --- DATABASE INITIALIZATION (Auto-Migrate) ---
+async function initDatabase() {
+  const query = `
+    CREATE TABLE IF NOT EXISTS users (
+      id SERIAL PRIMARY KEY,
+      telegram_id BIGINT UNIQUE,
+      email TEXT UNIQUE,
+      password_hash TEXT,
+      full_name TEXT,
+      role TEXT DEFAULT 'BUYER', -- ADMIN, SELLER, BUYER
+      trust_score INTEGER DEFAULT 0,
+      telegram_chat_id TEXT,
+      is_blocked BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
 
-const TELEGRAM_TOKEN = "8858899653:AAE4mHAIjKnhwgzuW4XRmMTC8kVJlKMcPOo";
+    CREATE TABLE IF NOT EXISTS posts (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id),
+      caption TEXT,
+      image_url TEXT,
+      category TEXT,
+      price TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
 
-async function sendTelegramMessage(chatId: string | number, text: string) {
+    CREATE TABLE IF NOT EXISTS security_logs (
+      id SERIAL PRIMARY KEY,
+      telegram_id TEXT,
+      action TEXT,
+      details JSONB,
+      severity TEXT,
+      timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `;
   try {
-    const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+    await pool.query(query);
+    console.log("🛡️ Guardian System: PostgreSQL Tables Verified.");
+  } catch (err) {
+    console.error("❌ DB Init Error:", err);
+  }
+}
+
+// --- GUARDIAN LOGGING ---
+async function logGuardianEvent(type: string, details: any, severity: string = "INFO") {
+  try {
+    await pool.query(
+      'INSERT INTO security_logs (telegram_id, action, details, severity) VALUES ($1, $2, $3, $4)',
+      [details.userId || details.ip, type, JSON.stringify(details), severity]
+    );
+  } catch (err) {
+    console.error("Logging Failed:", err);
+  }
+}
+
+// --- AUTHENTICATION MIDDLEWARE ---
+function authenticateToken(req: any, res: any, next: any) {
+  const authHeader = req.headers["authorization"];
+  const token = authHeader && authHeader.split(" ")[1];
+
+  if (!token) return res.sendStatus(401);
+
+  jwt.verify(token, JWT_SECRET, (err: any, user: any) => {
+    if (err) return res.sendStatus(403);
+    req.user = user;
+    next();
+  });
+}
+
+function requireRole(...roles: string[]) {
+  return (req: any, res: any, next: any) => {
+    if (!req.user || !roles.includes(req.user.role)) {
+      logGuardianEvent("UNAUTHORIZED_ROLE_ACCESS", { userId: req.user?.id, path: req.path }, "WARN");
+      return res.status(403).json({ error: "Insufficient permissions" });
+    }
+    next();
+  };
+}
+
+// --- TELEGRAM UTILITIES ---
+async function sendTelegramMessage(chatId: string | number, text: string) {
+  if (!TELEGRAM_TOKEN) return;
+  try {
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: text,
-        parse_mode: "Markdown"
-      })
+      body: JSON.stringify({ chat_id: chatId, text, parse_mode: "Markdown" })
     });
-    if (!response.ok) {
-      const err = await response.text();
-      console.error("Telegram API error response:", err);
-    }
   } catch (err) {
-    console.error("Error sending Telegram message:", err);
+    console.error("Telegram Send Error:", err);
   }
 }
 
+// --- TELEGRAM BOT POLLING (Optimized for PostgreSQL) ---
 async function startTelegramBotPolling() {
-  if (!TELEGRAM_TOKEN) {
-    console.log("No TELEGRAM_TOKEN configured. Skipping Telegram Bot.");
-    return;
-  }
-  console.log("Telegram Bot service started. Polling for updates...");
+  if (!TELEGRAM_TOKEN) return;
+  console.log("🤖 WING Telegram Guardian active. Polling updates...");
   
   let offset = 0;
-  
-  (async () => {
-    while (true) {
-      try {
-        const response = await fetch(
-          `https://api.telegram.org/bot${TELEGRAM_TOKEN}/getUpdates?offset=${offset}&timeout=15`
-        );
-        if (!response.ok) {
-          await new Promise(resolve => setTimeout(resolve, 5000));
-          continue;
-        }
-        const data = await response.json() as any;
-        if (data && data.ok && Array.isArray(data.result)) {
-          for (const update of data.result) {
-            offset = Math.max(offset, update.update_id + 1);
-            
-            if (update.message) {
-              const message = update.message;
-              const chatId = message.chat.id;
-              const text = (message.text || "").trim();
-              const username = message.chat.username || message.from?.username || "";
-              
-              if (text.startsWith("/start")) {
-                const parts = text.split(" ");
-                const param = parts[1] || "";
-                
-                if (param.startsWith("bind_")) {
-                  const userId = param.replace("bind_", "");
-                  try {
-                    const profileRef = doc(db, "profiles", userId);
-                    const profileSnap = await getDoc(profileRef);
-                    if (profileSnap.exists()) {
-                      await updateDoc(profileRef, {
-                        telegram_chat_id: String(chatId),
-                        telegram_username: username
-                      });
-                      
-                      const welcomeText = `🎉 *Account Successfully Linked!*\n\nHello *${profileSnap.data().full_name || "Artisan"}*, your WING profile has been securely linked to this Telegram Bot.\n\nNow, whenever a buyer sends you a direct message (DM) on WING or contacts you about one of your crafts, you will receive real-time notifications directly here!\n\nHappy crafting! 🪔🪵🧵`;
-                      await sendTelegramMessage(chatId, welcomeText);
-                    } else {
-                      await sendTelegramMessage(chatId, "⚠️ *Error:* We could not find an artisan profile matching that ID. Please go back to WING Settings and try again!");
-                    }
-                  } catch (err: any) {
-                    console.error("Error in Telegram bind:", err);
-                    await sendTelegramMessage(chatId, `⚠️ *Error:* Failed to link account: ${err.message}`);
-                  }
-                } else if (param.startsWith("buy_")) {
-                  const postId = param.replace("buy_", "");
-                  try {
-                    const postRef = doc(db, "posts", postId);
-                    const postSnap = await getDoc(postRef);
-                    if (postSnap.exists()) {
-                      const postData = postSnap.data();
-                      const makerId = postData.user_id;
-                      const makerRef = doc(db, "profiles", makerId);
-                      const makerSnap = await getDoc(makerRef);
-                      const makerData = makerSnap.exists() ? makerSnap.data() : null;
-                      
-                      if (makerData && makerData.telegram_chat_id) {
-                        const makerMsg = `🔔 *New Inquiry on WING!*\n\nHi *${makerData.full_name}*, a potential buyer is interested in purchasing your craft *"${postData.caption || "Craft Pin"}"*!\n\n👤 *Buyer:* @${username || "Anonymous"}\n📍 *Action:* Connect with them at @${username} or reply in the WING direct messages!`;
-                        await sendTelegramMessage(makerData.telegram_chat_id, makerMsg);
-                        
-                        await sendTelegramMessage(chatId, `📲 *Inquiry Sent!*\n\nI have notified the master artisan *${makerData.full_name || "Maker"}* that you are interested in *"${postData.caption}"*! They will contact you @${username} shortly. Thank you for supporting authentic traditional crafts! ✨`);
-                      } else {
-                        await addDoc(collection(db, "notifications"), {
-                          user_id: makerId,
-                          sender_name: "Telegram Bot Coordinator 🤖",
-                          sender_avatar: "https://api.dicebear.com/7.x/bottts/svg?seed=tele-coord",
-                          type: "telegram",
-                          post_id: postId,
-                          post_image: postData.image_url,
-                          content: `A buyer (@${username || "Anonymous"}) is interested in buying your craft "${postData.caption?.slice(0, 30)}..." on Telegram!`,
-                          read: false,
-                          created_at: new Date().toISOString()
-                        });
-                        
-                        await sendTelegramMessage(chatId, `📲 *Inquiry Recorded!*\n\nThis artisan hasn't linked their Telegram chat yet, but I have created a priority alert inside the WING app! You can also chat with them directly in WING.`);
-                      }
-                    } else {
-                      await sendTelegramMessage(chatId, "⚠️ *Error:* This craft pin could not be found or has been deleted.");
-                    }
-                  } catch (err: any) {
-                    console.error("Error in Telegram buy param:", err);
-                    await sendTelegramMessage(chatId, `⚠️ *Error:* Could not fetch craft details: ${err.message}`);
-                  }
-                } else {
-                  const greeting = `👋 *Welcome to WING Artisan Bot!* 🤖🇪🇹\n\nI am the real-time notification assistant for the *WING Traditional Crafts Platform*.\n\n*My features:*\n• Receive buyer inquiries immediately on Telegram.\n• Get instant notifications when people DM you in private chats.\n\n👉 *To Link Your WING Account:* Go to WING, open Settings, and click "Contact Support Bot" to link automatically!`;
-                  await sendTelegramMessage(chatId, greeting);
-                }
-              } else if (text === "/status") {
-                try {
-                  const qProfile = query(collection(db, "profiles"), where("telegram_chat_id", "==", String(chatId)));
-                  const snap = await getDocs(qProfile);
-                  if (!snap.empty) {
-                    const profileData = snap.docs[0].data();
-                    await sendTelegramMessage(chatId, `🟢 *Status:* Linked to *${profileData.full_name}* (@${profileData.telegram_username || "no_username"}). You are ready to receive real-time notifications!`);
-                  } else {
-                    await sendTelegramMessage(chatId, "🔴 *Status:* Unlinked. Please click the Telegram link in WING Settings to link your account.");
-                  }
-                } catch (e: any) {
-                  await sendTelegramMessage(chatId, `⚠️ Error: ${e.message}`);
-                }
-              } else if (text === "/unlink") {
-                try {
-                  const qProfile = query(collection(db, "profiles"), where("telegram_chat_id", "==", String(chatId)));
-                  const snap = await getDocs(qProfile);
-                  if (!snap.empty) {
-                    for (const docSnap of snap.docs) {
-                      await updateDoc(doc(db, "profiles", docSnap.id), {
-                        telegram_chat_id: "",
-                        telegram_username: ""
-                      });
-                    }
-                    await sendTelegramMessage(chatId, "🙋‍♂️ *Account Unlinked successfully.* You will no longer receive alerts here.");
-                  } else {
-                    await sendTelegramMessage(chatId, "No linked account found.");
-                  }
-                } catch (e: any) {
-                  await sendTelegramMessage(chatId, `⚠️ Error: ${e.message}`);
-                }
-              } else {
-                await sendTelegramMessage(chatId, "🤖 WING Bot: Use /status to check link, /unlink to remove link, or visit the WING website to explore beautiful traditional Ethiopian crafts.");
-              }
+  while (true) {
+    try {
+      const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/getUpdates?offset=${offset}&timeout=15`);
+      const data: any = await response.json();
+      
+      if (data?.ok && data.result.length > 0) {
+        for (const update of data.result) {
+          offset = update.update_id + 1;
+          const msg = update.message;
+          if (!msg || !msg.text) continue;
+
+          const chatId = msg.chat.id;
+          const text = msg.text.trim();
+          const userId = msg.from.id.toString();
+
+          if (text === "/start") {
+            // Register or Identify user
+            let res = await pool.query('SELECT * FROM users WHERE telegram_id = $1', [userId]);
+            let user = res.rows[0];
+
+            if (!user) {
+                const role = (userId === ADMIN_ID) ? 'ADMIN' : 'BUYER';
+                await pool.query('INSERT INTO users (telegram_id, username, role, telegram_chat_id) VALUES ($1, $2, $3, $4)', 
+                [userId, msg.from.username, role, chatId.toString()]);
+                await sendTelegramMessage(chatId, `👋 *Welcome to WING!* \nYour account is registered as: \`${role}\``);
+            } else {
+                await sendTelegramMessage(chatId, `🦅 *Welcome back, Artisan.* \nStatus: Verified ✅`);
             }
           }
+          
+          if (text === "/status") {
+              const res = await pool.query('SELECT role, trust_score FROM users WHERE telegram_id = $1', [userId]);
+              if (res.rows[0]) {
+                  const u = res.rows[0];
+                  await sendTelegramMessage(chatId, `📊 *WING Profile*\nRole: ${u.role}\nTrust Score: ${u.trust_score}`);
+              }
+          }
         }
-      } catch (err) {
-        console.error("Error in Telegram polling loop:", err);
-        await new Promise(resolve => setTimeout(resolve, 10000));
       }
+    } catch (err) {
+      await new Promise(r => setTimeout(r, 5000));
     }
-  })();
+  }
 }
 
-let aiClient: GoogleGenAI | null = null;
-function getGeminiClient(): GoogleGenAI {
-  if (!aiClient) {
-    const key = process.env.GEMINI_API_KEY;
-    if (!key) {
-      throw new Error("GEMINI_API_KEY environment variable is required to use AI features.");
+// --- API ENDPOINTS ---
+
+// 1. Auth: Login
+app.post("/api/auth/login", async (req, res) => {
+  const { email, password } = req.body;
+  try {
+    const userRes = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    const user = userRes.rows[0];
+
+    if (user && await bcrypt.compare(password, user.password_hash)) {
+      const token = jwt.sign({ id: user.id, role: user.role, email: user.email }, JWT_SECRET, { expiresIn: '2h' });
+      res.json({ accessToken: token, user });
+    } else {
+      logGuardianEvent("FAILED_LOGIN", { email, ip: req.ip }, "WARN");
+      res.status(401).json({ error: "Invalid credentials" });
     }
-    aiClient = new GoogleGenAI({
-      apiKey: key,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        },
-      },
-    });
-  }
-  return aiClient;
-}
-
-app.post("/api/mentor", async (req, res) => {
-  try {
-    const { messages } = req.body;
-    if (!messages || !Array.isArray(messages)) {
-      return res.status(400).json({ error: "Invalid messages format" });
-    }
-
-    const lastMessage = messages[messages.length - 1]?.content || "";
-    const abusiveKeywords = ["hack", "bypass instructions", "system prompt", "ignore previous"];
-    if (abusiveKeywords.some(keyword => lastMessage.toLowerCase().includes(keyword))) {
-      return res.json({
-        text: "As Wing Guide, I am here to help you build and grow your traditional artisan craft practice. Let's keep our conversation focused on techniques and business strategy!"
-      });
-    }
-
-    const ai = getGeminiClient();
-    const contents = messages.map((msg) => ({
-      role: msg.role === "assistant" ? "model" : "user",
-      parts: [{ text: msg.content }],
-    }));
-
-    const response = await ai.models.generateContent({
-      model: "gemini-1.5-flash",
-      contents,
-      config: {
-        systemInstruction: `You are Wing Guide, an expert artisan mentor. Help makers with techniques in Ceramics, Woodworking, Textiles, and Jewelry, and provide business advice for traditional crafts.`,
-      },
-    });
-
-    res.json({ text: response.text || "I'm sorry, I couldn't process that request." });
-  } catch (error: any) {
-    console.error("AI Mentor error:", error);
-    res.status(500).json({ error: error.message || "An error occurred with Wing Guide." });
+  } catch (err) {
+    res.status(500).send("Server Error");
   }
 });
 
-app.post("/api/search", async (req, res) => {
+// 2. AI Mentor (Gemini)
+const genAI = new GoogleGenAI(process.env.GEMINI_API_KEY || "");
+app.post("/api/mentor", authenticateToken, async (req, res) => {
   try {
-    const { query: searchQuery, posts } = req.body;
-    if (!searchQuery || !posts) return res.json({ matchedIds: [] });
-
-    const ai = getGeminiClient();
-    const simplifiedPosts = posts.map((p:any)=> ({ id: p.id, caption: p.caption || "" }));
-
-    const prompt = `Find matching post IDs for: "${searchQuery}". Posts: ${JSON.stringify(simplifiedPosts)}. Return ONLY a JSON array of strings.`;
-
-    const response = await ai.models.generateContent({
-      model: "gemini-1.5-flash",
-      contents: prompt,
-    });
-
-    const text = response.text?.trim() || "[]";
-    const cleanJsonString = text.replace(/^```json\s*/i, "").replace(/```$/, "").trim();
-    const matchedIds = JSON.parse(cleanJsonString);
-    res.json({ matchedIds });
-  } catch (error: any) {
-    res.json({ matchedIds: [] });
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const { prompt } = req.body;
+    
+    const result = await model.generateContent(`Context: You are Wing Guide, a mentor for Ethiopian Artisans. User asks: ${prompt}`);
+    res.json({ text: result.response.text() });
+  } catch (err) {
+    res.status(500).json({ error: "AI Mentor offline" });
   }
 });
 
-app.post("/api/voice/generate", async (req, res) => {
+// 3. Posts: Create (Artisan Only)
+app.post("/api/posts", authenticateToken, requireRole("SELLER", "ADMIN"), async (req: any, res) => {
+  const { caption, image_url, category, price } = req.body;
   try {
-    const { text, voiceName = "Zephyr" } = req.body;
-    const ai = getGeminiClient();
-    const response = await ai.models.generateContent({
-      model: "gemini-1.5-flash",
-      contents: [{ parts: [{ text: text }] }],
-    });
-    // Placeholder for TTS logic as standard Gemini doesn't return base64 audio directly in some regions
-    res.json({ audio: "" }); 
-  } catch (error: any) {
-    res.status(500).json({ error: "Voice Generation failed" });
+    const newPost = await pool.query(
+      'INSERT INTO posts (user_id, caption, image_url, category, price) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+      [req.user.id, caption, image_url, category, price]
+    );
+    res.status(201).json(newPost.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: "Post creation failed" });
   }
 });
 
-app.post("/api/telegram/send", async (req, res) => {
+// 4. Admin: Get Security Logs
+app.get("/api/admin/fraud-logs", authenticateToken, requireRole("ADMIN"), async (req, res) => {
   try {
-    const { chatId, text } = req.body;
-    await sendTelegramMessage(chatId, text);
-    res.json({ success: true });
-  } catch (error: any) {
-    res.status(500).json({ error: "Telegram dispatch failed" });
+    const logs = await pool.query('SELECT * FROM security_logs ORDER BY timestamp DESC LIMIT 50');
+    res.json(logs.rows);
+  } catch (err) {
+    res.status(500).send("Error fetching logs");
   }
 });
 
+// --- SERVER STARTUP ---
 async function startServer() {
-  startTelegramBotPolling().catch(err => console.error(err));
+  await initDatabase();
+  startTelegramBotPolling();
 
   if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
+    const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa" });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => res.sendFile(path.join(distPath, 'index.html')));
+    app.use(express.static(path.join(process.cwd(), 'dist')));
+    app.get('*', (req, res) => res.sendFile(path.join(process.cwd(), 'dist', 'index.html')));
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on port ${PORT}`);
+    console.log(`⭐ WING ENGINE ONLINE ON PORT ${PORT}`);
   });
 }
 
