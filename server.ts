@@ -1,6 +1,5 @@
 import express from "express";
 import path from "path";
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import dotenv from "dotenv";
 import pkg from 'pg';
 import jwt from 'jsonwebtoken';
@@ -20,10 +19,13 @@ const ADMIN_ID = process.env.ADMIN_ID || "8360912681";
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || "";
 const JWT_SECRET = process.env.JWT_SECRET || "wing-secret-key-change-in-production";
 const NODE_ENV = process.env.NODE_ENV || 'development';
+const HF_TOKEN = process.env.HUGGINGFACE_TOKEN || "";
 
-// Email Transporter Setup
+// Email Transporter Setup (Outlook)
 const transporter = nodemailer.createTransport({
-  service: process.env.EMAIL_SERVICE || 'gmail',
+  host: process.env.EMAIL_HOST || 'smtp.office365.com',
+  port: parseInt(process.env.EMAIL_PORT || '587'),
+  secure: false,
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS
@@ -37,15 +39,40 @@ const pool = new Pool({
 
 // Rate Limiter for Auth Endpoints
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // limit each IP to 5 requests per windowMs
+  windowMs: 15 * 60 * 1000,
+  max: 5,
   message: { error: "Too many authentication attempts. Please try again later." }
 });
 
 // Memory State for Bot Flows
 const userStates = new Map<string, { mode: 'APPLY' | 'POST'; step: number; data: any }>();
 
-// --- 2. DATABASE INITIALIZATION (The Marketplace Vault) ---
+// --- HUGGING FACE AI HELPER ---
+async function getAIResponse(prompt: string): Promise<string> {
+  if (!HF_TOKEN) return "AI service unavailable. Please contact admin.";
+  
+  try {
+    const response = await fetch("https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2", {
+      method: "POST",
+      headers: { 
+        "Authorization": `Bearer ${HF_TOKEN}`,
+        "Content-Type": "application/json" 
+      },
+      body: JSON.stringify({ 
+        inputs: prompt,
+        parameters: { max_new_tokens: 250, temperature: 0.7 }
+      })
+    });
+    
+    const data = await response.json();
+    return data[0]?.generated_text || "AI response unavailable";
+  } catch (err) {
+    console.error(" HF AI Error:", err);
+    return "AI service temporarily unavailable";
+  }
+}
+
+// --- 2. DATABASE INITIALIZATION ---
 async function initDatabase() {
   const query = `
     CREATE TABLE IF NOT EXISTS users (
@@ -85,11 +112,9 @@ async function initDatabase() {
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
-    -- Ensure BIGINT for large Telegram IDs
     ALTER TABLE users ALTER COLUMN telegram_id TYPE BIGINT USING telegram_id::BIGINT;
     ALTER TABLE wing_masterpieces ALTER COLUMN user_id TYPE BIGINT USING user_id::BIGINT;
     
-    -- Add missing columns if they don't exist
     ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT;
     ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name TEXT;
@@ -101,7 +126,7 @@ async function initDatabase() {
   try {
     await pool.query(query);
     console.log("🛡️ Database Patched: Auth & Commission tables ready.");
-  } catch (err: any) { console.error("❌ DB Init Error:", err.message); }
+  } catch (err: any) { console.error(" DB Init Error:", err.message); }
 }
 
 // --- 3. AUTHENTICATION API ENDPOINTS ---
@@ -111,33 +136,27 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
   try {
     const { email, password, full_name, telegram_id, role, business_scale, tg_wallet, tiktok } = req.body;
     
-    // Validate required fields
     if (!email || !password || !telegram_id) {
       return res.status(400).json({ error: "Email, password, and Telegram ID are required" });
     }
 
-    // Check if user already exists
     const existingUser = await pool.query('SELECT * FROM users WHERE email = $1 OR telegram_id = $2', [email, telegram_id]);
     if (existingUser.rows.length > 0) {
       return res.status(409).json({ error: "User with this email or Telegram ID already exists" });
     }
 
-    // Hash password
     const salt = await bcrypt.genSalt(10);
     const password_hash = await bcrypt.hash(password, salt);
 
-    // Generate verification token
     const verifyToken = jwt.sign({ email, type: 'verify' }, JWT_SECRET, { expiresIn: '24h' });
     const verifyLink = `${process.env.FRONTEND_URL || 'https://wing-artisan-bot.onrender.com'}/verify?token=${verifyToken}`;
 
-    // Insert user
     const result = await pool.query(
       `INSERT INTO users (email, password_hash, full_name, telegram_id, role, business_scale, trust_score) 
        VALUES ($1, $2, $3, $4, $5, $6, 10) RETURNING id, email, telegram_id, role, business_scale, trust_score`,
       [email, password_hash, full_name, telegram_id, role || 'buyer', business_scale || 'small']
     );
 
-    // Send verification email
     await transporter.sendMail({
       from: `"Wing Artisan Alliance" <${process.env.EMAIL_USER}>`,
       to: email,
@@ -210,7 +229,6 @@ app.post('/api/auth/forgot-password', authLimiter, async (req, res) => {
     const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
     const user = result.rows[0];
 
-    // Always return success to prevent email enumeration
     if (!user) return res.json({ message: "If an account exists, a reset link has been sent." });
 
     const resetToken = jwt.sign({ id: user.id, type: 'reset' }, JWT_SECRET, { expiresIn: '1h' });
@@ -280,7 +298,6 @@ app.get('/api/auth/verify', async (req, res) => {
 
     await pool.query('UPDATE users SET is_verified = TRUE WHERE email = $1', [payload.email]);
 
-    // Redirect to frontend success page
     res.redirect(`${process.env.FRONTEND_URL || 'https://wing-artisan-bot.onrender.com'}/verified`);
 
   } catch (err: any) {
@@ -302,7 +319,7 @@ async function sendTG(chatId: string | number, text: string, keyboard?: any) {
   } catch (e) { console.error("📡 TG Send Error"); }
 }
 
-// --- 5. THE MASTER TELEGRAM ENGINE (Marketplace Logic) ---
+// --- 5. THE MASTER TELEGRAM ENGINE ---
 async function startTelegramBotPolling() {
   if (!TELEGRAM_TOKEN) return;
   try { await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/deleteWebhook`); } catch (e) {}
@@ -347,7 +364,6 @@ async function startTelegramBotPolling() {
                 continue;
             }
 
-            // Generate web app link with TG ID for auth binding
             const webAppUrl = `https://wing-artisan-bot.onrender.com/?tg_id=${userId}`;
             await sendTG(chatId, `🦅 *WING Marketplace*\nRole: \`${role}\` \n/post - Upload\n/apply - Join\n/reset - Fix session\n\n🌐 Open Dashboard: ${webAppUrl}`);
             continue;
@@ -361,7 +377,6 @@ async function startTelegramBotPolling() {
                 const postRes = await pool.query('SELECT * FROM wing_masterpieces WHERE id = $1', [postId]);
                 const post = postRes.rows[0];
                 if (post) {
-                    // Get seller's commission rate based on business scale
                     const sellerRes = await pool.query('SELECT business_scale FROM users WHERE telegram_id = $1', [post.user_id]);
                     const sellerScale = sellerRes.rows[0]?.business_scale || 'small';
                     const rate = sellerScale === 'small' ? 0.10 : sellerScale === 'medium' ? 0.15 : 0.25;
@@ -380,7 +395,7 @@ async function startTelegramBotPolling() {
         // POSTING FLOW
         if (text === "/post") {
           if (user?.role !== 'SELLER' && user?.role !== 'ADMIN') return sendTG(chatId, "⚠️ Apply via /apply first.");
-          if (user?.is_limited) return sendTG(chatId, "🚫 Account limited due to unpaid commission.");
+          if (user?.is_limited) return sendTG(chatId, " Account limited due to unpaid commission.");
           userStates.set(userId, { mode: 'POST', step: 1, data: {} });
           await sendTG(chatId, " *Gallery Post*\nStep 1: Send a clear photo.");
           continue;
@@ -389,7 +404,7 @@ async function startTelegramBotPolling() {
         const state = userStates.get(userId);
         if (state && state.mode === 'POST') {
             if (state.step === 1 && update.message.photo) {
-                state.data.image = update.message.photo[update.message.photo.length - 1].file_id;
+                state.data.image = update.message.photo[update.message.photo.length - 1].file_file_id;
                 state.step = 2; await sendTG(chatId, "💰 *Step 2:* Price in ETB?");
             } else if (state.step === 2) {
                 state.data.price = text; state.step = 3;
@@ -441,13 +456,11 @@ async function startServer() {
 
   const distPath = path.join(process.cwd(), 'dist');
   
-  // Serve static files FIRST (before catch-all route)
   app.use(express.static(distPath, {
     index: 'index.html',
     extensions: ['html', 'htm']
   }));
 
-  // API routes for the dashboard
   app.get('/api/user/:telegramId', async (req, res) => {
     try {
       const result = await pool.query('SELECT id, telegram_id, username, role, trust_score, is_limited, business_scale FROM users WHERE telegram_id = $1', [req.params.telegramId]);
@@ -457,7 +470,6 @@ async function startServer() {
     }
   });
 
-  // Catch-all route MUST come after static files
   app.get('*', (req, res) => {
     res.sendFile(path.join(distPath, 'index.html'));
   });
