@@ -13,28 +13,28 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
-// --- CONFIGURATION ---
-const PORT = process.env.PORT || 3000;
+// --- 1. CONFIGURATION & ROBUSTNESS ---
+const PORT = process.env.PORT || 10000;
 const JWT_SECRET = process.env.JWT_ACCESS_SECRET || "wing-secure-secret-2024";
-const ADMIN_ID = process.env.ADMIN_ID; // From Render Env
+const ADMIN_ID = process.env.ADMIN_ID; // Your TG ID from Render Env
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || "";
 
-// --- POSTGRESQL CONNECTION ---
+// Initialize Postgres with SSL for Render
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false }
 });
 
-// --- DATABASE INITIALIZATION (Auto-Migrate) ---
+// --- 2. DATABASE INITIALIZATION ---
 async function initDatabase() {
   const query = `
     CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,
       telegram_id BIGINT UNIQUE,
+      username TEXT,
       email TEXT UNIQUE,
       password_hash TEXT,
-      full_name TEXT,
-      role TEXT DEFAULT 'BUYER', -- ADMIN, SELLER, BUYER
+      role TEXT DEFAULT 'BUYER',
       trust_score INTEGER DEFAULT 0,
       telegram_chat_id TEXT,
       is_blocked BOOLEAN DEFAULT FALSE,
@@ -68,23 +68,22 @@ async function initDatabase() {
   }
 }
 
-// --- GUARDIAN LOGGING ---
+// --- 3. GUARDIAN LOGGING ---
 async function logGuardianEvent(type: string, details: any, severity: string = "INFO") {
   try {
     await pool.query(
       'INSERT INTO security_logs (telegram_id, action, details, severity) VALUES ($1, $2, $3, $4)',
-      [details.userId || details.ip, type, JSON.stringify(details), severity]
+      [details.userId || "SYSTEM", type, JSON.stringify(details), severity]
     );
   } catch (err) {
     console.error("Logging Failed:", err);
   }
 }
 
-// --- AUTHENTICATION MIDDLEWARE ---
+// --- 4. AUTHENTICATION MIDDLEWARE ---
 function authenticateToken(req: any, res: any, next: any) {
   const authHeader = req.headers["authorization"];
   const token = authHeader && authHeader.split(" ")[1];
-
   if (!token) return res.sendStatus(401);
 
   jwt.verify(token, JWT_SECRET, (err: any, user: any) => {
@@ -104,7 +103,7 @@ function requireRole(...roles: string[]) {
   };
 }
 
-// --- TELEGRAM UTILITIES ---
+// --- 5. TELEGRAM UTILITIES ---
 async function sendTelegramMessage(chatId: string | number, text: string) {
   if (!TELEGRAM_TOKEN) return;
   try {
@@ -118,18 +117,37 @@ async function sendTelegramMessage(chatId: string | number, text: string) {
   }
 }
 
-// --- TELEGRAM BOT POLLING (Optimized for PostgreSQL) ---
+// --- 6. TELEGRAM BOT POLLING (Hardened) ---
 async function startTelegramBotPolling() {
-  if (!TELEGRAM_TOKEN) return;
-  console.log("🤖 WING Telegram Guardian active. Polling updates...");
+  if (!TELEGRAM_TOKEN) {
+    console.error("❌ Telegram Token missing! Bot will not start.");
+    return;
+  }
+
+  // FORCE RESET: Deletes any old Webhooks that make the bot silent
+  try {
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/deleteWebhook`);
+    console.log("🧹 Guardian: Webhook cleared. Polling mode activated.");
+  } catch (e) {
+    console.warn("⚠️ Failed to clear webhook, but continuing...");
+  }
+
+  console.log(`🤖 WING Guardian active. Token: ${TELEGRAM_TOKEN.substring(0, 5)}...`);
   
   let offset = 0;
   while (true) {
     try {
-      const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/getUpdates?offset=${offset}&timeout=15`);
+      const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/getUpdates?offset=${offset}&timeout=20`);
       const data: any = await response.json();
       
-      if (data?.ok && data.result.length > 0) {
+      if (!data.ok) {
+        console.error("❌ Telegram API Error:", data.description);
+        await new Promise(r => setTimeout(r, 10000)); // Cool down
+        continue;
+      }
+
+      if (data.result.length > 0) {
+        console.log(`📥 RECEIVED ${data.result.length} NEW MESSAGES`);
         for (const update of data.result) {
           offset = update.update_id + 1;
           const msg = update.message;
@@ -139,18 +157,20 @@ async function startTelegramBotPolling() {
           const text = msg.text.trim();
           const userId = msg.from.id.toString();
 
+          console.log(`💬 Message from ${userId}: ${text}`);
+
           if (text === "/start") {
-            // Register or Identify user
             let res = await pool.query('SELECT * FROM users WHERE telegram_id = $1', [userId]);
             let user = res.rows[0];
 
             if (!user) {
+                // If the user's ID matches your ADMIN_ID env var, make them ADMIN
                 const role = (userId === ADMIN_ID) ? 'ADMIN' : 'BUYER';
                 await pool.query('INSERT INTO users (telegram_id, username, role, telegram_chat_id) VALUES ($1, $2, $3, $4)', 
-                [userId, msg.from.username, role, chatId.toString()]);
-                await sendTelegramMessage(chatId, `👋 *Welcome to WING!* \nYour account is registered as: \`${role}\``);
+                [userId, msg.from.username || 'Artisan', role, chatId.toString()]);
+                await sendTelegramMessage(chatId, `👋 *Welcome to WING!* \n\nYour account is now registered as: \`${role}\` \nStatus: Verified ✅`);
             } else {
-                await sendTelegramMessage(chatId, `🦅 *Welcome back, Artisan.* \nStatus: Verified ✅`);
+                await sendTelegramMessage(chatId, `🦅 *Welcome back, Artisan.* \nRole: \`${user.role}\` \nStatus: Secure 🛡️`);
             }
           }
           
@@ -158,26 +178,25 @@ async function startTelegramBotPolling() {
               const res = await pool.query('SELECT role, trust_score FROM users WHERE telegram_id = $1', [userId]);
               if (res.rows[0]) {
                   const u = res.rows[0];
-                  await sendTelegramMessage(chatId, `📊 *WING Profile*\nRole: ${u.role}\nTrust Score: ${u.trust_score}`);
+                  await sendTelegramMessage(chatId, `📊 *WING Profile Status*\n\nRole: \`${u.role}\`\nTrust Score: \`${u.trust_score}\``);
               }
           }
         }
       }
     } catch (err) {
+      console.error("📡 Polling Loop Error:", err);
       await new Promise(r => setTimeout(r, 5000));
     }
   }
 }
 
-// --- API ENDPOINTS ---
+// --- 7. API ENDPOINTS ---
 
-// 1. Auth: Login
 app.post("/api/auth/login", async (req, res) => {
   const { email, password } = req.body;
   try {
     const userRes = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
     const user = userRes.rows[0];
-
     if (user && await bcrypt.compare(password, user.password_hash)) {
       const token = jwt.sign({ id: user.id, role: user.role, email: user.email }, JWT_SECRET, { expiresIn: '2h' });
       res.json({ accessToken: token, user });
@@ -185,26 +204,19 @@ app.post("/api/auth/login", async (req, res) => {
       logGuardianEvent("FAILED_LOGIN", { email, ip: req.ip }, "WARN");
       res.status(401).json({ error: "Invalid credentials" });
     }
-  } catch (err) {
-    res.status(500).send("Server Error");
-  }
+  } catch (err) { res.status(500).send("Server Error"); }
 });
 
-// 2. AI Mentor (Gemini)
 const genAI = new GoogleGenAI(process.env.GEMINI_API_KEY || "");
 app.post("/api/mentor", authenticateToken, async (req, res) => {
   try {
     const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
     const { prompt } = req.body;
-    
-    const result = await model.generateContent(`Context: You are Wing Guide, a mentor for Ethiopian Artisans. User asks: ${prompt}`);
+    const result = await model.generateContent(`You are Wing Guide, a mentor for Ethiopian Artisans. Assist with: ${prompt}`);
     res.json({ text: result.response.text() });
-  } catch (err) {
-    res.status(500).json({ error: "AI Mentor offline" });
-  }
+  } catch (err) { res.status(500).json({ error: "AI Mentor offline" }); }
 });
 
-// 3. Posts: Create (Artisan Only)
 app.post("/api/posts", authenticateToken, requireRole("SELLER", "ADMIN"), async (req: any, res) => {
   const { caption, image_url, category, price } = req.body;
   try {
@@ -213,24 +225,15 @@ app.post("/api/posts", authenticateToken, requireRole("SELLER", "ADMIN"), async 
       [req.user.id, caption, image_url, category, price]
     );
     res.status(201).json(newPost.rows[0]);
-  } catch (err) {
-    res.status(500).json({ error: "Post creation failed" });
-  }
+  } catch (err) { res.status(500).json({ error: "Post creation failed" }); }
 });
 
-// 4. Admin: Get Security Logs
-app.get("/api/admin/fraud-logs", authenticateToken, requireRole("ADMIN"), async (req, res) => {
-  try {
-    const logs = await pool.query('SELECT * FROM security_logs ORDER BY timestamp DESC LIMIT 50');
-    res.json(logs.rows);
-  } catch (err) {
-    res.status(500).send("Error fetching logs");
-  }
-});
-
-// --- SERVER STARTUP ---
+// --- 8. SERVER STARTUP ---
 async function startServer() {
+  console.log("🚀 Starting WING Backend...");
   await initDatabase();
+  
+  // Start bot polling
   startTelegramBotPolling();
 
   if (process.env.NODE_ENV !== "production") {
