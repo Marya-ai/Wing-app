@@ -15,33 +15,31 @@ app.use(express.json());
 
 // --- 1. CONFIGURATION ---
 const PORT = process.env.PORT || 10000;
-const JWT_SECRET = process.env.JWT_ACCESS_SECRET || "wing-secure-secret-2024";
+const JWT_SECRET = process.env.JWT_ACCESS_SECRET || "wing-secure-2024";
 const ADMIN_ID = process.env.ADMIN_ID || "8360912681";
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || "";
 
-// Database Setup (Render Postgres)
+// Database Setup for Render Postgres
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false }
 });
 
-// State Management for multi-step bot flows (Applications & Gallery Posts)
+// Memory for multi-step flows (Apply to sell / Post product)
 const userStates = new Map<string, { 
   mode: 'APPLY' | 'POST'; 
   step: number; 
   data: any 
 }>();
 
-// --- 2. THE ULTIMATE DATABASE INITIALIZATION ---
+// --- 2. CRITICAL DATABASE INITIALIZATION ---
 async function initDatabase() {
   const query = `
     -- Create Users Table
     CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,
-      telegram_id BIGINT UNIQUE,
+      telegram_id BIGINT UNIQUE, -- CRITICAL FIX: BIGINT handles large IDs
       username TEXT,
-      email TEXT UNIQUE,
-      password_hash TEXT,
       role TEXT DEFAULT 'BUYER',
       trust_score INTEGER DEFAULT 0,
       craft_type TEXT,
@@ -52,38 +50,27 @@ async function initDatabase() {
     -- Create Posts Table
     CREATE TABLE IF NOT EXISTS posts (
       id SERIAL PRIMARY KEY,
-      user_id BIGINT,
+      user_id BIGINT, -- CRITICAL FIX: BIGINT to match users table
       caption TEXT,
       image_url TEXT,
       price TEXT,
-      category TEXT,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
-    -- Create Security Logs Table
-    CREATE TABLE IF NOT EXISTS security_logs (
-      id SERIAL PRIMARY KEY,
-      telegram_id TEXT,
-      action TEXT,
-      details JSONB,
-      severity TEXT,
-      timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-
-    -- CRITICAL REPAIR: Upgrade columns to BIGINT to handle your Telegram ID
-    -- This fixes the "Out of Range" error specifically.
+    -- EMERGENCY SCHEMA REPAIR
+    -- This forces existing tables to upgrade to BIGINT if they were created as INT
     ALTER TABLE users ALTER COLUMN telegram_id TYPE BIGINT;
     ALTER TABLE posts ALTER COLUMN user_id TYPE BIGINT;
-
-    -- Maintenance: Ensure all columns are present for the gallery
-    ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'BUYER';
+    
+    -- Ensure columns exist for older DB versions
     ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'BUYER';
     ALTER TABLE posts ADD COLUMN IF NOT EXISTS price TEXT;
     ALTER TABLE posts ADD COLUMN IF NOT EXISTS image_url TEXT;
   `;
   try {
     await pool.query(query);
-    console.log("🛡️ WING Vault: Database structure upgraded and verified.");
+    console.log("🛡️ Guardian System: PostgreSQL structure upgraded to BIGINT.");
   } catch (err: any) {
     console.error("❌ DB Maintenance Error:", err.message);
   }
@@ -101,21 +88,21 @@ async function sendTG(chatId: string | number, text: string) {
   } catch (e) { console.error("📡 TG Transmission Error"); }
 }
 
-// --- 4. THE MASTER TELEGRAM ENGINE ---
+// --- 4. THE MASTER TELEGRAM ENGINE (Polling Mode) ---
 async function startTelegramBotPolling() {
   if (!TELEGRAM_TOKEN) return;
   
-  // Clear Webhooks to enable Polling mode on Render
+  // Reset connection to wake up the bot
   try { await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/deleteWebhook`); } catch (e) {}
 
-  // AI Mentor Standby (Gemini Foundation)
+  // AI Mentor (Safe-Start initialization)
   let aiModel: any = null;
   try {
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
     aiModel = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-  } catch (e) { console.log("⚠️ AI Mentor awaiting key activation."); }
+  } catch (e) { console.log("⚠️ AI Mentor Standby (Key needed)."); }
 
-  console.log(`🤖 WING Master Engine Active. Polling for Artisans...`);
+  console.log(`🤖 WING Master Engine Active. Token starts with: ${TELEGRAM_TOKEN.substring(0, 5)}...`);
   
   let offset = 0;
   while (true) {
@@ -130,76 +117,77 @@ async function startTelegramBotPolling() {
         if (!msg) continue;
 
         const chatId = msg.chat.id;
-        const userId = msg.from.id.toString();
+        const userId = msg.from.id.toString(); 
         const text = msg.text?.trim();
 
-        // 🛡️ USER AUTH/REGISTRATION
+        // 🛡️ USER AUTHENTICATION
         let res = await pool.query('SELECT * FROM users WHERE telegram_id = $1', [userId]);
         let user = res.rows[0];
 
-        // --- COMMAND: /start ---
+        // COMMAND: /start
         if (text === "/start") {
           const role = (userId === ADMIN_ID) ? 'ADMIN' : 'BUYER';
           if (!user) {
             await pool.query('INSERT INTO users (telegram_id, username, role) VALUES ($1, $2, $3) ON CONFLICT (telegram_id) DO NOTHING', 
             [userId, msg.from.username || 'Artisan', role]);
           }
-          await sendTG(chatId, `🦅 *Welcome to WING Artisan Alliance*\n\nYour Role: \`${user?.role || role}\` \nStatus: Verified ✅\n\n/apply - Become a Seller\n/post - Upload Craft\n/reset - Reset if stuck`);
+          await sendTG(chatId, `🦅 *Welcome to WING Artisan Alliance*\n\nYour Role: \`${user?.role || role}\` \nStatus: Verified ✅\n\n/post - Upload Craft\n/apply - Become Seller\n/reset - Reset if stuck`);
           continue;
         }
 
-        // --- COMMAND: /reset (EMERGENCY FIX) ---
+        // COMMAND: /reset
         if (text === "/reset" || text === "/cancel") {
           userStates.delete(userId);
-          await sendTG(chatId, "🔄 *Session Reset.* You can now start a clean /post or /apply.");
+          await sendTG(chatId, "🔄 *Session Reset.* You can now start over.");
           continue;
         }
 
-        // --- COMMAND: /post (The Masterpiece Gallery) ---
+        // COMMAND: /post
         if (text === "/post") {
           if (user?.role !== 'SELLER' && user?.role !== 'ADMIN') {
              return sendTG(chatId, "⚠️ Only Verified Artisans can post. Please use /apply first.");
           }
           userStates.set(userId, { mode: 'POST', step: 1, data: {} });
-          await sendTG(chatId, "📸 *Gallery Post: Step 1*\n\nPlease send a clear photo of your finished craft.");
+          await sendTG(chatId, "📸 *Gallery Post: Step 1*\n\nPlease send a photo of your masterpiece.");
           continue;
         }
 
-        // --- COMMAND: /apply ---
+        // COMMAND: /apply
         if (text === "/apply") {
           userStates.set(userId, { mode: 'APPLY', step: 1, data: {} });
           await sendTG(chatId, "🎨 *Artisan Application*\nStep 1: What type of craft do you make?");
           continue;
         }
 
-        // --- CONVERSATION HANDLER ---
+        // MULTI-STEP LOGIC HANDLER
         const state = userStates.get(userId);
         if (state) {
-          // A. POSTING FLOW
+          // --- MODE: POSTING A PRODUCT ---
           if (state.mode === 'POST') {
             if (state.step === 1 && msg.photo) {
               state.data.image = msg.photo[msg.photo.length - 1].file_id;
               state.step = 2;
               await sendTG(chatId, "💰 *Step 2:* What is the price in ETB?");
             } else if (state.step === 2) {
-              state.data.price = text; state.step = 3;
+              state.data.price = text;
+              state.step = 3;
               await sendTG(chatId, "📝 *Step 3:* Write a short description.");
             } else if (state.step === 3 && text) {
               try {
-                // SAVING TO DATABASE (Using explicit BIGINT conversion)
+                // SAVING TO DATABASE
                 await pool.query(
                   'INSERT INTO posts (user_id, caption, image_url, price) VALUES ($1, $2, $3, $4)', 
                   [BigInt(userId), text, state.data.image, state.data.price]
                 );
-                await sendTG(chatId, "✅ *Masterpiece Published!*\n\nYour work is officially live in the WING digital vault.");
+                await sendTG(chatId, "✅ *Masterpiece Published!*\n\nYour craft is now live in the digital gallery.");
                 userStates.delete(userId);
               } catch (dbErr: any) {
-                console.error("DB INSERT FAIL:", dbErr.message);
+                console.error("DB INSERT FAILED:", dbErr.message);
                 await sendTG(chatId, `❌ *Database Error:* ${dbErr.message}`);
               }
             }
           }
-          // B. APPLICATION FLOW
+          // --- MODE: APPLYING TO BE SELLER ---
           else if (state.mode === 'APPLY') {
             if (state.step === 1) {
               state.data.craft = text; state.step = 2;
@@ -208,7 +196,7 @@ async function startTelegramBotPolling() {
               state.data.loc = text; state.step = 3;
               await sendTG(chatId, "📸 Step 3: Photo of your work?");
             } else if (state.step === 3 && msg.photo) {
-              await sendTG(chatId, "⏳ *Application Submitted!* Admin will review soon.");
+              await sendTG(chatId, "⏳ *Submitted!* Admin will review soon.");
               await sendTG(ADMIN_ID, `🔔 *NEW APP*\nUser: @${msg.from.username}\nCraft: ${state.data.craft}\n/verify_${userId}`);
               userStates.delete(userId);
             }
@@ -216,23 +204,23 @@ async function startTelegramBotPolling() {
           continue;
         }
 
-        // --- ADMIN: VERIFY USER ---
+        // ADMIN: /verify_ID
         if (text?.startsWith("/verify_") && userId === ADMIN_ID) {
           const targetId = text.split("_")[1];
           await pool.query("UPDATE users SET role = 'SELLER' WHERE telegram_id = $1", [targetId]);
-          await sendTG(targetId, "🎉 *Verified!* You are now a Verified WING Seller.");
+          await sendTG(targetId, "🎉 *Verified!* You are now a Verified Seller.");
           await sendTG(ADMIN_ID, `✅ User ${targetId} promoted.`);
           continue;
         }
 
-        // --- COMMAND: /ask (Gemini AI) ---
+        // AI MENTOR: /ask
         if (text?.startsWith("/ask ")) {
           const prompt = text.replace("/ask ", "");
           await sendTG(chatId, "💡 *Wing Guide is analyzing...*");
           try {
             const result = await aiModel.generateContent(prompt);
-            await sendTG(chatId, `📖 *Artisan Advice:*\n\n${result.response.text()}`);
-          } catch (e) { await sendTG(chatId, "⚠️ AI Mentor is currently resting."); }
+            await sendTG(chatId, `📖 *Advice:*\n\n${result.response.text()}`);
+          } catch (e) { await sendTG(chatId, "⚠️ AI Mentor is currently offline."); }
         }
       }
     } catch (err) { await new Promise(r => setTimeout(r, 5000)); }
@@ -247,9 +235,9 @@ app.get("/api/gallery", async (req, res) => {
   } catch (err) { res.status(500).json([]); }
 });
 
-// --- 6. SERVER STARTUP ---
+// --- 6. START SERVER ---
 async function startServer() {
-  console.log("🚀 WING Engine activating...");
+  console.log("🚀 Starting WING Engine...");
   await initDatabase();
   startTelegramBotPolling();
 
@@ -262,7 +250,7 @@ async function startServer() {
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`⭐ WING MASTER ENGINE ONLINE ON PORT ${PORT}`);
+    console.log(`⭐ WING ENGINE ONLINE ON PORT ${PORT}`);
   });
 }
 
