@@ -21,15 +21,25 @@ const JWT_SECRET = process.env.JWT_SECRET || "wing-secret-key-change-in-producti
 const NODE_ENV = process.env.NODE_ENV || 'development';
 const HF_TOKEN = process.env.HUGGINGFACE_TOKEN || "";
 
-// Email Transporter Setup (Outlook)
+// Email Transporter Setup (HARDCODED OUTLOOK TO PREVENT LOCALHOST FALLBACK)
 const transporter = nodemailer.createTransport({
-  host: process.env.EMAIL_HOST || 'smtp.office365.com',
-  port: parseInt(process.env.EMAIL_PORT || '587'),
-  secure: false,
+  host: "smtp.office365.com",
+  port: 587,
+  secure: false, // STARTTLS
   auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS
+    user: process.env.EMAIL_USER || "wingartisan.alliance@outlook.com",
+    pass: process.env.EMAIL_PASS || ""
+  },
+  tls: {
+    ciphers: 'SSLv3',
+    rejectUnauthorized: false
   }
+});
+
+// Verify email connection on startup
+transporter.verify((error, success) => {
+  if (error) console.error("❌ Email config failed:", error.message);
+  else console.log("✅ Email service ready");
 });
 
 const pool = new Pool({
@@ -358,7 +368,7 @@ async function startTelegramBotPolling() {
             const payload = text.split(" ")[1];
             if (payload?.startsWith("qr_")) {
                 const postId = payload.replace("qr_", "");
-                await sendTG(chatId, `🛍️ *Confirm Purchase*\nDid you just buy Item #${postId}?`, {
+                await sendTG(chatId, `️ *Confirm Purchase*\nDid you just buy Item #${postId}?`, {
                     inline_keyboard: [[{ text: "✅ Yes, I Confirm", callback_data: `confirm_buy_${postId}` }]]
                 });
                 continue;
@@ -394,7 +404,7 @@ async function startTelegramBotPolling() {
 
         // POSTING FLOW
         if (text === "/post") {
-          if (user?.role !== 'SELLER' && user?.role !== 'ADMIN') return sendTG(chatId, "⚠️ Apply via /apply first.");
+          if (user?.role !== 'SELLER' && user?.role !== 'ADMIN') return sendTG(chatId, "️ Apply via /apply first.");
           if (user?.is_limited) return sendTG(chatId, " Account limited due to unpaid commission.");
           userStates.set(userId, { mode: 'POST', step: 1, data: {} });
           await sendTG(chatId, " *Gallery Post*\nStep 1: Send a clear photo.");
@@ -404,7 +414,7 @@ async function startTelegramBotPolling() {
         const state = userStates.get(userId);
         if (state && state.mode === 'POST') {
             if (state.step === 1 && update.message.photo) {
-                state.data.image = update.message.photo[update.message.photo.length - 1].file_file_id;
+                state.data.image = update.message.photo[update.message.photo.length - 1].file_id;
                 state.step = 2; await sendTG(chatId, "💰 *Step 2:* Price in ETB?");
             } else if (state.step === 2) {
                 state.data.price = text; state.step = 3;
@@ -415,7 +425,7 @@ async function startTelegramBotPolling() {
                     const link = `https://t.me/WingArtisanBot?start=qr_${postRes.rows[0].id}`;
                     await sendTG(chatId, `✅ *Published!*\nReceipt Link: \`${link}\``);
                     userStates.delete(userId);
-                } catch (e: any) { await sendTG(chatId, `❌ DB Error: ${e.message}`); }
+                } catch (e: any) { await sendTG(chatId, ` DB Error: ${e.message}`); }
             }
             continue;
         }
