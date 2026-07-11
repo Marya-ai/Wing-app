@@ -1,6 +1,26 @@
 import React, { useState, useEffect } from 'react';
 import { X, Mail, Lock, User, Wallet, Globe, TrendingUp, Info, ArrowRight, Sparkles, CheckCircle, AlertTriangle, RefreshCw } from 'lucide-react';
 
+// Declare Telegram WebApp types to prevent TypeScript errors
+declare global {
+  interface Window {
+    Telegram?: {
+      WebApp?: {
+        initDataUnsafe?: {
+          user?: {
+            id: number;
+            username?: string;
+            first_name?: string;
+            last_name?: string;
+          };
+        };
+        ready: () => void;
+        expand: () => void;
+      };
+    };
+  }
+}
+
 interface AuthModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -18,8 +38,28 @@ export default function AuthModal({ isOpen, onClose, onLoginSuccess }: AuthModal
   const [verificationEmail, setVerificationEmail] = useState('');
   const [resetToken, setResetToken] = useState('');
 
-  // Get Telegram ID from URL params (passed by bot deep link)
-  const telegramId = new URLSearchParams(window.location.search).get('tg_id') || '';
+  // ✅ FIXED: Get Telegram ID from WebApp SDK FIRST, fallback to URL params
+  const telegramId = 
+    window.Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString() || 
+    new URLSearchParams(window.location.search).get('tg_id') || '';
+
+  // Initialize Telegram WebApp when modal opens
+  useEffect(() => {
+    if (isOpen && window.Telegram?.WebApp) {
+      window.Telegram.WebApp.ready();
+      window.Telegram.WebApp.expand();
+      
+      // Auto-fill form with Telegram data if available
+      const tgUser = window.Telegram.WebApp.initDataUnsafe?.user;
+      if (tgUser && view === 'register') {
+        setFormData(prev => ({
+          ...prev,
+          fullName: `${tgUser.first_name || ''} ${tgUser.last_name || ''}`.trim(),
+          username: tgUser.username || prev.username
+        }));
+      }
+    }
+  }, [isOpen, view]);
 
   // Animation trigger
   useEffect(() => {
