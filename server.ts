@@ -326,7 +326,7 @@ async function sendTG(chatId: string | number, text: string, keyboard?: any) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body)
     });
-  } catch (e) { console.error("📡 TG Send Error"); }
+  } catch (e) { console.error(" TG Send Error"); }
 }
 
 // --- 5. THE MASTER TELEGRAM ENGINE ---
@@ -374,8 +374,16 @@ async function startTelegramBotPolling() {
                 continue;
             }
 
-            const webAppUrl = `https://wing-artisan-bot.onrender.com/?tg_id=${userId}`;
-            await sendTG(chatId, `🦅 *WING Marketplace*\nRole: \`${role}\` \n/post - Upload\n/apply - Join\n/reset - Fix session\n\n🌐 Open Dashboard: ${webAppUrl}`);
+            // ✅ FIXED: Use web_app button to inject user data securely
+            // Do NOT add ?tg_id=... here. Telegram handles it automatically.
+            await sendTG(chatId, `🦅 *WING Marketplace*\nRole: \`${role}\``, {
+              inline_keyboard: [[
+                { 
+                  text: "🌐 Open Dashboard", 
+                  web_app: { url: "https://wing-artisan-bot.onrender.com" } 
+                }
+              ]]
+            });
             continue;
         }
 
@@ -418,7 +426,7 @@ async function startTelegramBotPolling() {
                 state.step = 2; await sendTG(chatId, "💰 *Step 2:* Price in ETB?");
             } else if (state.step === 2) {
                 state.data.price = text; state.step = 3;
-                await sendTG(chatId, "📝 *Step 3:* Short description.");
+                await sendTG(chatId, " *Step 3:* Short description.");
             } else if (state.step === 3 && text) {
                 try {
                     const postRes = await pool.query('INSERT INTO wing_masterpieces (user_id, caption, image_url, price) VALUES ($1, $2, $3, $4) RETURNING id', [BigInt(userId), text, state.data.image, state.data.price]);
@@ -438,9 +446,9 @@ async function startTelegramBotPolling() {
         }
         if (state && state.mode === 'APPLY') {
             if (state.step === 1) { state.data.craft = text; state.step = 2; await sendTG(chatId, "📍 Workshop location?"); }
-            else if (state.step === 2) { state.data.loc = text; state.step = 3; await sendTG(chatId, "📸 Send a photo of your work."); }
+            else if (state.step === 2) { state.data.loc = text; state.step = 3; await sendTG(chatId, " Send a photo of your work."); }
             else if (state.step === 3 && update.message.photo) {
-              await sendTG(chatId, "⏳ Application submitted!");
+              await sendTG(chatId, " Application submitted!");
               await sendTG(ADMIN_ID, `🔔 *NEW APP* from @${userObj.username}\nCraft: ${state.data.craft}\n/verify_${userId}`);
               userStates.delete(userId);
             }

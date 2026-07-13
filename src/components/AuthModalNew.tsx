@@ -38,10 +38,21 @@ export default function AuthModal({ isOpen, onClose, onLoginSuccess }: AuthModal
   const [verificationEmail, setVerificationEmail] = useState('');
   const [resetToken, setResetToken] = useState('');
 
-  // ✅ FIXED: Get Telegram ID from WebApp SDK FIRST, fallback to URL params
-  const telegramId = 
-    window.Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString() || 
-    new URLSearchParams(window.location.search).get('tg_id') || '';
+  // ✅ FIXED: Get Telegram ID with debug logging
+  const telegramId = (() => {
+    const sdkId = window.Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString();
+    const urlId = new URLSearchParams(window.location.search).get('tg_id');
+    
+    // Debug log to console
+    console.log('=== TELEGRAM ID DEBUG ===');
+    console.log('SDK User Data:', window.Telegram?.WebApp?.initDataUnsafe?.user);
+    console.log('SDK Extracted ID:', sdkId);
+    console.log('URL Param ID:', urlId);
+    console.log('Final Telegram ID:', sdkId || urlId || '');
+    console.log('========================');
+    
+    return sdkId || urlId || '';
+  })();
 
   // Initialize Telegram WebApp when modal opens
   useEffect(() => {
@@ -165,7 +176,7 @@ export default function AuthModal({ isOpen, onClose, onLoginSuccess }: AuthModal
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || 'Failed to send reset email');
         
-        setSuccessMessage("📧 Password reset link sent! Check your inbox.");
+        setSuccessMessage(" Password reset link sent! Check your inbox.");
         setTimeout(() => setView('login'), 3000);
       }
 
