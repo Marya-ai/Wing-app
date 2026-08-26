@@ -1,3 +1,26 @@
+// --- TELEGRAM WEBAPP TYPES ---
+declare global {
+  interface Window {
+    Telegram?: {
+      WebApp?: {
+        initDataUnsafe?: {
+          user?: {
+            id: number;
+            username?: string;
+            first_name?: string;
+            last_name?: string;
+            photo_url?: string;
+          };
+        };
+        ready: () => void;
+        expand: () => void;
+        MainButton?: any;
+        BackButton?: any;
+      };
+    };
+  }
+}
+
 // --- USER & ARTISAN PROFILE ---
 export interface UserProfile {
   id: string;
@@ -5,16 +28,24 @@ export interface UserProfile {
   full_name: string;
   avatar_url?: string;
   bio?: string;
-  is_maker: boolean;
+  is_maker: boolean;          // DEPRECATED: Use 'role' instead
   theme_preference: 'light' | 'dark';
   telegram_username?: string;
   telegram_chat_id?: string;
   
+  //  PLAN A FIELDS
+  phone_number?: string;      // For Telebirr payouts (hidden from public)
+  role: 'buyer' | 'seller' | 'both' | 'admin';  // Account type
+  business_scale: 'small' | 'medium' | 'large'; // Commission tier
+  agreed_to_terms: boolean;   // Digital signature agreement
+  is_limited: boolean;        // Account limited due to unpaid commission
+  is_verified: boolean;       // Email verified
+  
   // WING ADDITIONS
-  phone?: string;             // For Telebirr
+  phone?: string;             // DEPRECATED: Use phone_number
   trust_score: number;        // Artisan reputation (0-100+)
   commission_rate: number;    // Chosen rate (10-25%)
-  has_agreed: boolean;        // Agreement to terms
+  has_agreed: boolean;        // DEPRECATED: Use agreed_to_terms
   is_admin?: boolean;         // Access to Admin Dashboard
   total_sales?: number;       // Number of verified sales
   isFlagged?: boolean;        // Fraud protection flag
@@ -122,5 +153,21 @@ export interface Message {
   avatar_url?: string;
   content: string;
   image_url?: string;
+  created_at: string;
+}
+
+// --- COMMISSION & ESCROW (NEW) ---
+export interface Commission {
+  id: string;
+  seller_id: string;
+  buyer_id: string;
+  post_id: string;
+  item_price: number;
+  commission_amount: number;
+  total_amount: number;
+  unique_code: string;        // The decimal code (e.g., "83")
+  expected_amount: string;    // Full amount with decimal (e.g., "220.83")
+  token: string;              // WING-uuid token
+  status: 'PENDING_BUYER_PAYMENT' | 'PENDING_SELLER_CONFIRM' | 'ACTIVE' | 'COMPLETED' | 'REFUNDED';
   created_at: string;
 }
