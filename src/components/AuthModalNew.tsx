@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Mail, Lock, User, Wallet, Globe, TrendingUp, Info, ArrowRight, Sparkles, CheckCircle, AlertTriangle, RefreshCw } from 'lucide-react';
+import { X, Mail, Lock, User, Wallet, Globe, TrendingUp, Info, ArrowRight, Sparkles, CheckCircle, AlertTriangle, RefreshCw, Phone, Shield } from 'lucide-react';
 
 // Declare Telegram WebApp types to prevent TypeScript errors
 declare global {
@@ -12,6 +12,7 @@ declare global {
             username?: string;
             first_name?: string;
             last_name?: string;
+            photo_url?: string;
           };
         };
         ready: () => void;
@@ -28,6 +29,7 @@ interface AuthModalProps {
 }
 
 type ViewMode = 'login' | 'register' | 'verify-email' | 'forgot-password' | 'reset-password';
+type UserRole = 'buyer' | 'seller' | 'both';
 
 export default function AuthModal({ isOpen, onClose, onLoginSuccess }: AuthModalProps) {
   const [view, setView] = useState<ViewMode>('login');
@@ -38,12 +40,11 @@ export default function AuthModal({ isOpen, onClose, onLoginSuccess }: AuthModal
   const [verificationEmail, setVerificationEmail] = useState('');
   const [resetToken, setResetToken] = useState('');
 
-  // ✅ FIXED: Get Telegram ID with debug logging
+  // Get Telegram ID with debug logging
   const telegramId = (() => {
     const sdkId = window.Telegram?.WebApp?.initDataUnsafe?.user?.id?.toString();
     const urlId = new URLSearchParams(window.location.search).get('tg_id');
     
-    // Debug log to console
     console.log('=== TELEGRAM ID DEBUG ===');
     console.log('SDK User Data:', window.Telegram?.WebApp?.initDataUnsafe?.user);
     console.log('SDK Extracted ID:', sdkId);
@@ -90,7 +91,8 @@ export default function AuthModal({ isOpen, onClose, onLoginSuccess }: AuthModal
     confirmPassword: '',
     fullName: '', 
     username: '', 
-    isMaker: false,
+    phoneNumber: '',
+    role: 'buyer' as UserRole,
     businessScale: 'small' as 'small' | 'medium' | 'large', 
     tgWallet: '', 
     tiktok: '',
@@ -116,6 +118,9 @@ export default function AuthModal({ isOpen, onClose, onLoginSuccess }: AuthModal
         if (formData.password !== formData.confirmPassword) throw new Error("Passwords do not match");
         if (formData.password.length < 8) throw new Error("Password must be at least 8 characters");
         if (!telegramId) throw new Error("⚠️ Please open this via @WingArtisanBot to link your account");
+        if (!formData.phoneNumber || !/^\+?[\d\s-]{10,}$/.test(formData.phoneNumber)) {
+          throw new Error("Please enter a valid phone number (e.g., +251911234567)");
+        }
       }
 
       // REGISTER FLOW
@@ -128,8 +133,9 @@ export default function AuthModal({ isOpen, onClose, onLoginSuccess }: AuthModal
             password: formData.password,
             full_name: formData.fullName,
             username: formData.username,
+            phone_number: formData.phoneNumber,
             telegram_id: telegramId,
-            role: formData.isMaker ? 'seller' : 'buyer',
+            role: formData.role,
             business_scale: formData.businessScale,
             trust_score: 10,
             tg_wallet: formData.tgWallet,
@@ -323,19 +329,45 @@ export default function AuthModal({ isOpen, onClose, onLoginSuccess }: AuthModal
                     </div>
                   </div>
 
-                  {/* MAKER TOGGLE */}
-                  <label className="flex items-center justify-between p-4 bg-amber-50 rounded-2xl border border-amber-200 cursor-pointer hover:bg-amber-100/50 transition-colors group">
-                    <div className="flex items-center gap-3">
-                      <div className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${formData.isMaker ? 'bg-[#E07A5F] border-[#E07A5F]' : 'border-slate-300 bg-white'}`}>
-                        {formData.isMaker && <ArrowRight className="w-3 h-3 text-white rotate-[-45deg]" />}
-                      </div>
-                      <span className="text-sm font-black text-slate-800 group-hover:text-[#E07A5F] transition-colors">Register as a Maker?</span>
-                    </div>
-                    <input type="checkbox" checked={formData.isMaker} onChange={e=>setFormData({...formData, isMaker: e.target.checked})} className="hidden" />
-                  </label>
+                  {/* PHONE NUMBER FIELD - NEW */}
+                  <div>
+                    <label className={labelClass}><Phone className="w-3 h-3 inline mr-1"/> Phone Number <span className="text-[10px] text-slate-400">(Required for Telebirr payouts & delivery)</span></label>
+                    <input 
+                      required 
+                      type="tel" 
+                      value={formData.phoneNumber} 
+                      onChange={e=>setFormData({...formData, phoneNumber: e.target.value})} 
+                      className={inputClass} 
+                      placeholder="+251 911 234 567" 
+                    />
+                    <p className="text-[10px] text-slate-500 mt-1 ml-1 flex items-center gap-1">
+                      <Shield className="w-3 h-3" /> Your number is private. Only WING Admin can see it for dispute resolution.
+                    </p>
+                  </div>
 
-                  {/* MAKER DETAILS */}
-                  {formData.isMaker && (
+                  {/* ROLE SELECTION - REPLACED ISMAKER TOGGLE */}
+                  <div>
+                    <label className={labelClass}>Account Type</label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {(['buyer', 'seller', 'both'] as UserRole[]).map(roleType => (
+                        <button 
+                          key={roleType} 
+                          type="button" 
+                          onClick={()=>setFormData({...formData, role: roleType})} 
+                          className={`py-3 rounded-xl text-[10px] font-black uppercase border-2 transition-all duration-200 ${
+                            formData.role === roleType 
+                              ? 'bg-[#E07A5F] text-white border-[#E07A5F] shadow-lg shadow-[#E07A5F]/20 scale-[1.02]' 
+                              : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300'
+                          }`}
+                        >
+                          {roleType === 'buyer' ? '🛒 Buyer' : roleType === 'seller' ? '🎨 Seller' : '🔄 Both'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* SELLER DETAILS - Only show if role is 'seller' or 'both' */}
+                  {(formData.role === 'seller' || formData.role === 'both') && (
                     <div className="overflow-hidden transition-all duration-500 ease-in-out max-h-[800px] opacity-100">
                       <div className="border-l-4 border-[#E07A5F] pl-5 py-2 space-y-5 bg-white/50 p-5 rounded-r-2xl">
                         

@@ -180,10 +180,10 @@ export default function PinDetailModal({
             {/* Message Maker & Telegram Coordinator Actions (if not messaging self) */}
             {user?.uid !== post.user_id && (
               <div className="flex flex-col sm:flex-row gap-2 shrink-0">
-                {/* Buy via Telegram Bot */}
+                {/* Buy via Telegram Bot (UPDATED TO QR_ DEEP LINK) */}
                 <a
                   id="telegram-contact-btn"
-                  href={`https://t.me/WingArtisanBot?start=buy_${post.id}`}
+                  href={`https://t.me/WingArtisanBot?start=qr_${post.id}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={handleTelegramClick}
@@ -191,8 +191,8 @@ export default function PinDetailModal({
                     isDarkMode ? 'bg-[#229ED9] hover:bg-[#229ED9]/90' : 'bg-[#0088cc] hover:bg-[#0088cc]/90'
                   }`}
                 >
-                  <Send className="w-3 h-3" />
-                  <span>{t.contactSellerTelegram}</span>
+                  <ShieldCheck className="w-3 h-3" />
+                  <span>{t.contactSellerTelegram || 'Secure Purchase'}</span>
                 </a>
 
                 {/* Direct Message on Site */}
@@ -202,7 +202,7 @@ export default function PinDetailModal({
                   className={`flex items-center justify-center gap-1.5 px-3 py-2 rounded-full text-[11px] font-bold shadow transition-all focus:scale-95 duration-150 ${activeBg}`}
                 >
                   <Mail className="w-3 h-3" />
-                  <span>{t.contactSellerWeb}</span>
+                  <span>{t.contactSellerWeb || 'Message Maker'}</span>
                 </button>
               </div>
             )}
