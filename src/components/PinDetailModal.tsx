@@ -3,6 +3,7 @@ import { Post, Comment, UserProfile } from '../types';
 import { fetchComments, addComment, createNotification } from '../lib/services';
 import { X, Send, Heart, Layers, Wrench, MessageSquare, ShieldCheck, Mail } from 'lucide-react';
 import { Language, translations } from '../lib/translations';
+import { getUserAvatar, getPostAuthorAvatar } from '../lib/avatarUtils'; // NEW: Avatar utilities
 
 interface PinDetailModalProps {
   post: Post | null;
@@ -29,6 +30,16 @@ export default function PinDetailModal({
   const [newCommentText, setNewCommentText] = useState('');
   const [submittingComment, setSubmittingComment] = useState(false);
   const [loadingComments, setLoadingComments] = useState(true);
+  
+  // NEW: State to hold the Telegram profile photo URL
+  const [telegramPhotoUrl, setTelegramPhotoUrl] = useState<string | undefined>();
+
+  // NEW: Fetch Telegram photo on mount
+  useEffect(() => {
+    if (window.Telegram?.WebApp?.initDataUnsafe?.user?.photo_url) {
+      setTelegramPhotoUrl(window.Telegram.WebApp.initDataUnsafe.user.photo_url);
+    }
+  }, []);
 
   useEffect(() => {
     if (!post) return;
@@ -64,7 +75,8 @@ export default function PinDetailModal({
         post_id: post.id,
         user_id: user.uid,
         username: profile?.full_name || user.displayName || 'Artisan',
-        avatar_url: profile?.avatar_url || `https://api.dicebear.com/7.x/bottts/svg?seed=${user.uid}`,
+        // UPDATED: Use smart avatar logic
+        avatar_url: getUserAvatar(profile, telegramPhotoUrl),
         content: newCommentText.trim()
       };
 
@@ -75,7 +87,8 @@ export default function PinDetailModal({
         await createNotification({
           user_id: post.user_id,
           sender_name: profile?.full_name || user.displayName || 'Artisan',
-          sender_avatar: profile?.avatar_url || `https://api.dicebear.com/7.x/bottts/svg?seed=${user.uid}`,
+          // UPDATED: Use smart avatar logic
+          sender_avatar: getUserAvatar(profile, telegramPhotoUrl),
           type: 'comment',
           post_id: post.id,
           post_image: post.image_url,
@@ -104,7 +117,8 @@ export default function PinDetailModal({
       await createNotification({
         user_id: post.user_id,
         sender_name: profile?.full_name || user?.displayName || 'Artisan Buyer',
-        sender_avatar: profile?.avatar_url || `https://api.dicebear.com/7.x/bottts/svg?seed=${user?.uid || 'buyer'}`,
+        // UPDATED: Use smart avatar logic
+        sender_avatar: getUserAvatar(profile, telegramPhotoUrl),
         type: 'telegram',
         post_id: post.id,
         post_image: post.image_url,
@@ -121,6 +135,10 @@ export default function PinDetailModal({
   const activeColor = isDarkMode ? 'text-[#D4AF37]' : 'text-[#E07A5F]';
   const activeBg = isDarkMode ? 'bg-[#D4AF37] hover:bg-opacity-90 text-black' : 'bg-[#E07A5F] hover:bg-opacity-90 text-white';
   const activeBorder = isDarkMode ? 'border-[#D4AF37]' : 'border-[#E07A5F]';
+
+  // NEW: Pre-calculate avatars for rendering
+  const userAvatar = getUserAvatar(profile, telegramPhotoUrl);
+  const postAuthorAvatar = getPostAuthorAvatar(post.user_id, post.author_avatar);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fade-in">
@@ -165,8 +183,9 @@ export default function PinDetailModal({
           {/* Top section: Maker Profile */}
           <div className="flex items-center justify-between pb-4 border-b border-black/5 dark:border-white/5 mb-6">
             <div className="flex items-center gap-3">
+              {/* UPDATED: Use smart post author avatar */}
               <img
-                src={post.author_avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${post.user_id}`}
+                src={postAuthorAvatar}
                 alt={post.author_name}
                 referrerPolicy="no-referrer"
                 className="w-11 h-11 rounded-full border border-gray-400"
