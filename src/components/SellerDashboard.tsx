@@ -1,27 +1,24 @@
 import React, { useState, useEffect } from 'react';
 import { Post, UserProfile } from '../types';
-// WING: Firebase & Service Imports
+// WING: Firebase & Service Imports (Kept for your existing post/profile sync)
 import { db } from '../lib/firebase';
 import { collection, query, where, onSnapshot, doc } from 'firebase/firestore';
-// Safe import with fallback check
-import { reportSaleAction } from '../lib/wingServices';
 
 import { 
   CheckCircle, AlertCircle, CreditCard, 
-  ArrowRight, ShieldCheck, History, Tag, X, Package, Clock, Send, ExternalLink, AlertTriangle
+  ArrowRight, ShieldCheck, History, Tag, X, Package, Clock, Send, ExternalLink, AlertTriangle, Bot
 } from 'lucide-react';
 import ReputationBadge from './ReputationBadge';
+import { getUserAvatar } from '../lib/avatarUtils'; // NEW: Smart Avatar Logic
 
 interface SellerDashboardProps {
-  user?: any;           // Made optional
-  profile?: UserProfile | null; // Made optional (we'll fetch if not provided)
-  isDarkMode?: boolean; // Made optional
+  user?: any;           
+  profile?: UserProfile | null; 
+  isDarkMode?: boolean; 
 }
 
-// WING: Replace this with your personal Telegram link or Bot link
-const SUPPORT_LINK = "https://t.me/@mari_beeee"; 
-// WING: Replace this with your actual Telebirr number
-const TELEBIRR_NUMBER = "09XXXXXXXX"; 
+const SUPPORT_LINK = "https://t.me/WingArtisanBot"; 
+const TELEBIRR_NUMBER = "09XX-XXX-XXX"; // Update with your actual number
 
 export default function SellerDashboard({ 
   user = null, 
@@ -31,11 +28,18 @@ export default function SellerDashboard({
   
   const [myPosts, setMyPosts] = useState<Post[]>([]);
   const [profile, setProfile] = useState<UserProfile | null>(initialProfile);
-  const [reportingPost, setReportingPost] = useState<Post | null>(null);
-  const [tokenInput, setTokenInput] = useState('');
-  const [step, setStep] = useState<'input' | 'payment'>('input');
+  const [infoPost, setInfoPost] = useState<Post | null>(null);
   const [loading, setLoading] = useState(true);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  
+  // NEW: State to hold the Telegram profile photo URL
+  const [telegramPhotoUrl, setTelegramPhotoUrl] = useState<string | undefined>();
+
+  // NEW: Fetch Telegram photo on mount
+  useEffect(() => {
+    if (window.Telegram?.WebApp?.initDataUnsafe?.user?.photo_url) {
+      setTelegramPhotoUrl(window.Telegram.WebApp.initDataUnsafe.user.photo_url);
+    }
+  }, []);
 
   const activeBg = isDarkMode ? 'bg-[#D4AF37] text-black' : 'bg-[#E07A5F] text-white';
   const activeColor = isDarkMode ? 'text-[#D4AF37]' : 'text-[#E07A5F]';
@@ -69,42 +73,8 @@ export default function SellerDashboard({
     return () => unsubscribe();
   }, [user]);
 
-  // 3. Handle Sale Reporting Logic
-  const handleReportSale = async () => {
-    if (!reportingPost || !tokenInput || !user) return;
-    setIsSubmitting(true);
-
-    try {
-      // Safe check: only call if function exists
-      if (typeof reportSaleAction !== 'function') {
-        throw new Error("Sales reporting service is currently unavailable.");
-      }
-
-      // Dynamic Calculation based on the rate they chose at registration
-      const rate = profile?.commission_rate || 15;
-      const commissionAmount = (reportingPost.price || 0) * (rate / 100);
-
-      const result = await reportSaleAction(
-        reportingPost.id, 
-        user.uid, 
-        tokenInput, 
-        commissionAmount
-      );
-
-      if (result?.success) {
-        setStep('payment');
-      } else {
-        alert(result?.error || "Token verification failed. Ask the buyer for the correct WCT-ET code.");
-      }
-    } catch (err: any) {
-      console.error(err);
-      alert(err.message || "Error connecting to Wing services.");
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const isRestricted = (profile?.trust_score || 0) < 0;
+  // NEW: Updated restriction logic to use the new database field
+  const isRestricted = profile?.is_limited || (profile?.trust_score || 0) < 0;
 
   // Show auth prompt if no user
   if (!user && !loading) {
@@ -126,9 +96,10 @@ export default function SellerDashboard({
       <header className="max-w-6xl mx-auto mb-16 flex flex-col md:flex-row md:items-center justify-between gap-8">
         <div className="flex items-center gap-6">
            <div className="relative">
+             {/* UPDATED: Use smart avatar logic */}
              <img 
-               src={profile?.avatar_url || `https://api.dicebear.com/7.x/bottts/svg?seed=${user?.uid}`} 
-               className="w-20 h-20 rounded-[2rem] border-2 border-[#E07A5F] object-cover shadow-2xl" 
+               src={getUserAvatar(profile, telegramPhotoUrl)} 
+               className="w-20 h-20 rounded-[2rem] border-2 border-[#E07A5F] object-cover shadow-2xl bg-gray-200" 
                alt="Artisan" 
              />
              <div className="absolute -bottom-2 -right-2 bg-green-500 p-1.5 rounded-full border-4 border-white dark:border-[#0A0A0A]">
@@ -142,7 +113,7 @@ export default function SellerDashboard({
              <div className="mt-2 flex items-center gap-3">
                 <ReputationBadge score={profile?.trust_score || 0} size="md" />
                 <span className="text-[10px] font-black uppercase text-gray-500 tracking-widest bg-gray-500/10 px-3 py-1 rounded-full border dark:border-gray-800">
-                  {profile?.commission_rate || 15}% Fee Rate
+                  {profile?.business_scale === 'medium' ? '15%' : profile?.business_scale === 'large' ? '25%' : '10%'} Fee Rate
                 </span>
              </div>
            </div>
@@ -152,7 +123,7 @@ export default function SellerDashboard({
           <div className="bg-red-500/10 border border-red-500/20 p-6 rounded-[2.5rem] flex items-center gap-4 max-w-sm">
             <AlertTriangle className="w-8 h-8 text-red-500 shrink-0" />
             <p className="text-[10px] font-black text-red-500 uppercase tracking-widest leading-relaxed">
-              Restricted: Your trust score is negative. Pay pending commissions to enable sales reporting.
+              Restricted: Account limited due to unpaid commissions. Contact Admin to resolve.
             </p>
           </div>
         )}
@@ -176,7 +147,7 @@ export default function SellerDashboard({
         </div>
         <div className={`p-10 rounded-[3rem] border ${isDarkMode ? 'bg-[#111] border-gray-800' : 'bg-white border-gray-100 shadow-sm'}`}>
           <Clock className="w-8 h-8 text-[#E07A5F] mb-6" />
-          <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Pending Review</h4>
+          <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Pending Escrow</h4>
           <p className={`text-4xl font-black mt-2 ${isDarkMode ? 'text-white' : 'text-black'}`}>
             {myPosts.filter(p => p.sales_status === 'pending_verification').length}
           </p>
@@ -199,7 +170,6 @@ export default function SellerDashboard({
               <p className="text-[10px] font-black text-gray-500 uppercase tracking-[0.3em]">No crafts posted yet.</p>
             </div>
           ) : myPosts.map((post) => {
-            // FIX: Safe defaults for potentially undefined fields
             const safeStatus = post.sales_status || 'available';
             const safePrice = post.price || 0;
             const safeCaption = post.caption || "Handmade Piece";
@@ -228,7 +198,7 @@ export default function SellerDashboard({
                         safeStatus === 'pending_verification' ? 'border-blue-500/30 text-blue-500' : 
                         'border-gray-500/30 text-gray-500'
                       }`}>
-                        {safeStatus.replace('_', ' ')}
+                        {safeStatus === 'pending_verification' ? 'Escrow Active' : safeStatus.replace('_', ' ')}
                       </span>
                     </div>
                   </div>
@@ -237,21 +207,21 @@ export default function SellerDashboard({
                 <div className="w-full md:w-auto">
                   {safeStatus === 'available' && !isRestricted && (
                     <button 
-                      onClick={() => { setReportingPost(post); setStep('input'); }}
-                      className={`w-full md:w-auto flex items-center justify-center gap-3 px-12 py-5 rounded-[1.5rem] font-black text-[10px] uppercase tracking-widest shadow-2xl transition-all active:scale-95 ${activeBg}`}
+                      onClick={() => setInfoPost(post)}
+                      className={`w-full md:w-auto flex items-center justify-center gap-3 px-8 py-5 rounded-[1.5rem] font-black text-[10px] uppercase tracking-widest shadow-2xl transition-all active:scale-95 ${activeBg}`}
                     >
-                      Mark Sold <ArrowRight className="w-4 h-4" />
+                      <Bot className="w-4 h-4" /> Escrow Info
                     </button>
                   )}
                   {safeStatus === 'pending_verification' && (
                     <div className="px-8 py-4 bg-blue-500/10 rounded-2xl text-center border border-blue-500/20">
-                       <p className="text-[10px] font-black text-blue-500 uppercase tracking-widest">Awaiting Admin</p>
+                       <p className="text-[10px] font-black text-blue-500 uppercase tracking-widest">Check Telegram Bot</p>
                     </div>
                   )}
                   {safeStatus === 'sold' && (
                     <div className="flex items-center gap-2 text-green-500 bg-green-500/10 px-8 py-4 rounded-2xl border border-green-500/20">
                       <CheckCircle className="w-4 h-4" />
-                      <span className="text-[10px] font-black uppercase tracking-widest">Verified</span>
+                      <span className="text-[10px] font-black uppercase tracking-widest">Payout Pending</span>
                     </div>
                   )}
                 </div>
@@ -261,96 +231,62 @@ export default function SellerDashboard({
         </div>
       </div>
 
-      {/* 4. REPORTING MODAL */}
-      {reportingPost && (
+      {/* 4. ESCROW INFO MODAL (Replaced old manual reporting modal) */}
+      {infoPost && (
         <div className="fixed inset-0 z-[7000] flex items-center justify-center p-4 bg-black/98 backdrop-blur-3xl animate-in fade-in duration-300">
-          <div className={`w-full max-w-md rounded-[4rem] p-12 shadow-2xl border relative ${isDarkMode ? 'bg-[#0F0F0F] border-gray-800' : 'bg-white border-gray-100'}`}>
+          <div className={`w-full max-w-md rounded-[4rem] p-10 shadow-2xl border relative ${isDarkMode ? 'bg-[#0F0F0F] border-gray-800' : 'bg-white border-gray-100'}`}>
             
-            <button onClick={() => setReportingPost(null)} className="absolute top-10 right-10 p-2 text-gray-500 hover:text-white"><X className="w-8 h-8" /></button>
+            <button onClick={() => setInfoPost(null)} className="absolute top-8 right-8 p-2 text-gray-500 hover:text-white transition-colors"><X className="w-8 h-8" /></button>
 
-            {step === 'input' ? (
-              <>
-                <div className="text-center mb-12">
-                  <div className={`w-24 h-24 rounded-full flex items-center justify-center mx-auto mb-8 ${isDarkMode ? 'bg-white/5' : 'bg-gray-50'}`}>
-                    <Tag className={`w-12 h-12 ${activeColor}`} />
-                  </div>
-                  <h3 className={`text-2xl font-black uppercase tracking-tight ${isDarkMode ? 'text-white' : 'text-black'}`}>Token Required</h3>
-                  <p className="text-[11px] text-gray-500 mt-4 font-bold uppercase leading-relaxed tracking-tight px-4">
-                    Enter the WCT-ET token provided by the buyer to report this sale.
-                  </p>
-                </div>
+            <div className="text-center mb-10">
+              <div className={`w-24 h-24 rounded-full flex items-center justify-center mx-auto mb-8 ${isDarkMode ? 'bg-white/5' : 'bg-gray-50'}`}>
+                <ShieldCheck className={`w-12 h-12 ${activeColor}`} />
+              </div>
+              <h3 className={`text-2xl font-black uppercase tracking-tight ${isDarkMode ? 'text-white' : 'text-black'}`}>Secure Escrow Active</h3>
+              <p className="text-[11px] text-gray-500 mt-4 font-bold uppercase leading-relaxed tracking-tight px-4">
+                You no longer need to manually report sales or pay commissions upfront.
+              </p>
+            </div>
 
-                <input 
-                  type="text" 
-                  placeholder="WCT-ET-XXXXXX"
-                  value={tokenInput}
-                  onChange={(e) => setTokenInput(e.target.value.toUpperCase())}
-                  className={`w-full p-8 rounded-[2.5rem] border-2 text-center font-mono text-3xl font-black mb-10 outline-none transition-all ${isDarkMode ? 'bg-white/5 border-gray-800 text-white focus:border-[#D4AF37]' : 'bg-gray-50 border-gray-200 focus:border-[#E07A5F]'}`}
-                />
+            <div className="space-y-4 mb-8">
+              <div className="p-6 rounded-[2rem] bg-green-500/5 border border-green-500/10 flex items-start gap-4">
+                 <CheckCircle className="w-6 h-6 text-green-500 shrink-0 mt-1" />
+                 <div>
+                   <p className={`text-sm font-black ${isDarkMode ? 'text-white' : 'text-black'}`}>1. Buyer Pays First</p>
+                   <p className="text-[10px] text-gray-500 mt-1">The buyer deposits the full amount (Price + WING Fee) into secure escrow.</p>
+                 </div>
+              </div>
 
-                <button 
-                  onClick={handleReportSale} 
-                  disabled={isSubmitting || !tokenInput}
-                  className={`w-full py-7 rounded-[2rem] font-black text-[11px] uppercase tracking-[0.4em] shadow-2xl ${activeBg} disabled:opacity-50 active:scale-95 transition-all`}
-                >
-                  {isSubmitting ? 'Verifying...' : 'Submit Sale Report'}
-                </button>
-              </>
-            ) : (
-              <>
-                <div className="text-center mb-10">
-                  <div className="w-24 h-24 bg-green-500/10 rounded-full flex items-center justify-center mx-auto mb-8">
-                    <CheckCircle className="w-12 h-12 text-green-500" />
-                  </div>
-                  <h3 className={`text-2xl font-black uppercase tracking-tight ${isDarkMode ? 'text-white' : 'text-black'}`}>Report Success</h3>
-                  <p className="text-[11px] text-gray-500 mt-4 font-bold uppercase leading-relaxed px-6">
-                    Sale logged! Pay the commission below and send the receipt to our admin to verify.
-                  </p>
-                </div>
+              <div className="p-6 rounded-[2rem] bg-blue-500/5 border border-blue-500/10 flex items-start gap-4">
+                 <Bot className="w-6 h-6 text-blue-500 shrink-0 mt-1" />
+                 <div>
+                   <p className={`text-sm font-black ${isDarkMode ? 'text-white' : 'text-black'}`}>2. You Confirm in Telegram</p>
+                   <p className="text-[10px] text-gray-500 mt-1">You will receive a bot message asking you to confirm the sale. Click "Confirm Sale".</p>
+                 </div>
+              </div>
 
-                <div className="bg-gray-100 dark:bg-white/5 rounded-[3rem] p-10 mb-8 border dark:border-gray-800">
-                  <div className="flex justify-between items-center pt-8 border-t dark:border-gray-700">
-                    <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Commission Due ({profile?.commission_rate || 15}%)</span>
-                    <span className={`text-3xl font-black ${activeColor}`}>
-                      {((reportingPost.price || 0) * (profile?.commission_rate || 15) / 100).toLocaleString()} ETB
-                    </span>
-                  </div>
-                </div>
+              <div className="p-6 rounded-[2rem] bg-[#E07A5F]/5 border border-[#E07A5F]/10 flex items-start gap-4">
+                 <CreditCard className="w-6 h-6 text-[#E07A5F] shrink-0 mt-1" />
+                 <div>
+                   <p className={`text-sm font-black ${isDarkMode ? 'text-white' : 'text-black'}`}>3. Automatic Payout</p>
+                   <p className="text-[10px] text-gray-500 mt-1">Once the buyer confirms receipt, WING automatically deducts the fee and sends your share to your Telebirr.</p>
+                 </div>
+              </div>
+            </div>
 
-                <div className="space-y-4 mb-8">
-                   {/* TELEBIRR INFO */}
-                   <div className="p-6 rounded-[2rem] bg-blue-500/5 border border-blue-500/10 flex items-center gap-6">
-                      <div className="p-4 bg-blue-500/20 rounded-2xl"><CreditCard className="w-7 h-7 text-blue-500" /></div>
-                      <div>
-                        <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Telebirr Number</p>
-                        <p className={`text-lg font-black ${isDarkMode ? 'text-white' : 'text-black'}`}>{TELEBIRR_NUMBER}</p>
-                      </div>
-                   </div>
+            <button 
+              onClick={() => window.open(SUPPORT_LINK, '_blank')}
+              className={`w-full py-6 rounded-[2rem] font-black text-[11px] uppercase tracking-[0.2em] shadow-2xl flex items-center justify-center gap-3 transition-all active:scale-95 ${activeBg}`}
+            >
+              Open Telegram Bot <ExternalLink className="w-4 h-4" />
+            </button>
 
-                   {/* DIRECT CHAT BUTTON */}
-                   <button 
-                      onClick={() => window.open(SUPPORT_LINK, '_blank')}
-                      className="w-full flex items-center justify-between p-6 rounded-[2.5rem] bg-sky-500/10 border border-sky-500/20 text-sky-500 hover:bg-sky-500 hover:text-white transition-all group shadow-xl"
-                   >
-                      <div className="flex items-center gap-6">
-                         <Send className="w-8 h-8" />
-                         <div className="text-left">
-                            <p className="text-[11px] font-black uppercase tracking-widest">Send Screenshot</p>
-                            <p className="text-[9px] font-bold uppercase opacity-60">Chat with Wing Admin</p>
-                         </div>
-                      </div>
-                      <ExternalLink className="w-5 h-5" />
-                   </button>
-                </div>
-
-                <button 
-                  onClick={() => { setReportingPost(null); setStep('input'); setTokenInput(''); }}
-                  className="w-full py-6 text-[10px] font-black text-gray-500 uppercase tracking-widest"
-                >
-                  Return to Dashboard
-                </button>
-              </>
-            )}
+            <button 
+              onClick={() => setInfoPost(null)}
+              className="w-full py-4 mt-4 text-[10px] font-black text-gray-500 uppercase tracking-widest hover:text-gray-300 transition-colors"
+            >
+              Close
+            </button>
           </div>
         </div>
       )}
