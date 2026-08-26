@@ -589,7 +589,9 @@ async function startTelegramBotPolling() {
           await sendTG(ADMIN_ID, `✅ User ${target} promoted.`);
         }
       }
-    } catch (err) { await new Promise(r => setTimeout(r, 5000)); }
+    } catch (err) { 
+      console.error("Bot polling error:", err);
+      await new Promise(r => setTimeout(r, 5000)); 
     }
   }
 }
