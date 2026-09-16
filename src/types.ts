@@ -33,7 +33,7 @@ export interface UserProfile {
   telegram_username?: string;
   telegram_chat_id?: string;
   
-  //  PLAN A FIELDS
+  // PLAN A & MANAGED MARKETPLACE FIELDS
   phone_number?: string;      // For Telebirr payouts (hidden from public)
   role: 'buyer' | 'seller' | 'both' | 'admin';  // Account type
   business_scale: 'small' | 'medium' | 'large'; // Commission tier
@@ -41,7 +41,7 @@ export interface UserProfile {
   is_limited: boolean;        // Account limited due to unpaid commission
   is_verified: boolean;       // Email verified
   
-  // WING ADDITIONS
+  // WING ADDITIONS (Legacy/Compatibility)
   phone?: string;             // DEPRECATED: Use phone_number
   trust_score: number;        // Artisan reputation (0-100+)
   commission_rate: number;    // Chosen rate (10-25%)
@@ -66,7 +66,9 @@ export interface Post {
   
   // WING ADDITIONS
   price: number;
-  stock_count: number;
+  stock_count: number;        // Legacy field
+  stock_quantity?: number;    // NEW: Matches database stock_quantity
+  seller_subcity?: string;    // NEW: For delivery calculation (e.g., 'Bole', 'Kirkos')
   wing_token: string;         // Unique WCT-ET-XXXXXX code
   sales_status: 'available' | 'pending_verification' | 'sold';
   trust_score: number;        // Cached from seller for feed display
@@ -76,6 +78,31 @@ export interface Post {
   likes_count: number;
   comments_count: number;
   created_at: string;
+}
+
+// --- MANAGED MARKETPLACE ORDERS (NEW) ---
+export interface Order {
+  id: string;
+  order_token: string;              // e.g., "ORD-A1B2C3"
+  buyer_id: string;
+  seller_id: string;
+  post_id: string;
+  quantity: number;
+  selected_color: string;
+  buyer_subcity: string;            // e.g., "Bole", "Ayat"
+  buyer_address: string;            // Detailed delivery address
+  buyer_phone: string;              // Hidden from seller, visible to Admin/Courier
+  delivery_method: 'motorbike' | 'isuzu' | 'bus_station' | 'pickup';
+  item_price: number;
+  commission_fee: number;
+  delivery_fee: number;
+  total_amount: number;
+  status: 'pending_payment' | 'paid' | 'dispatched' | 'delivered' | 'cancelled';
+  created_at: string;
+  
+  // Optional fields populated by Admin JOIN queries for UI display
+  item_name?: string;
+  buyer_name?: string;
 }
 
 // --- WING SALES REPORTS (FOR ADMIN) ---
@@ -88,7 +115,7 @@ export interface SaleReport {
   amount: number;
   commission: number;
   status: 'verifying' | 'completed' | 'fraud_flagged';
-  reportedAt: any;            // Firebase Timestamp
+  reportedAt: any;            // Firebase Timestamp or Date string
   verifiedAt?: any;
 }
 
@@ -98,7 +125,7 @@ export interface Notification {
   user_id: string;
   sender_name: string;
   sender_avatar?: string;
-  type: 'like' | 'comment' | 'system' | 'telegram' | 'message';
+  type: 'like' | 'comment' | 'system' | 'telegram' | 'message' | 'order_update';
   post_id?: string;
   post_image?: string;
   content: string;
@@ -156,7 +183,7 @@ export interface Message {
   created_at: string;
 }
 
-// --- COMMISSION & ESCROW (NEW) ---
+// --- COMMISSION & ESCROW (LEGACY/HYBRID) ---
 export interface Commission {
   id: string;
   seller_id: string;
