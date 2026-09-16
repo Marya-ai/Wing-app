@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Post, Comment, UserProfile } from '../types';
 import { fetchComments, addComment, createNotification } from '../lib/services';
-import { X, Send, Heart, Layers, Wrench, MessageSquare, ShieldCheck, Mail } from 'lucide-react';
+import { X, Send, Heart, Layers, Wrench, MessageSquare, ShieldCheck, Mail, ShoppingCart, Bookmark } from 'lucide-react';
 import { Language, translations } from '../lib/translations';
-import { getUserAvatar, getPostAuthorAvatar } from '../lib/avatarUtils'; // NEW: Avatar utilities
+import { getUserAvatar, getPostAuthorAvatar } from '../lib/avatarUtils';
 
 interface PinDetailModalProps {
   post: Post | null;
@@ -14,6 +14,8 @@ interface PinDetailModalProps {
   isDarkMode: boolean;
   onMessageMaker: (makerId: string, makerName: string) => void;
   lang: Language;
+  onOpenCheckout?: (post: Post) => void; // NEW: Triggers the buying flow
+  onToggleSave?: (postId: string, isSaved: boolean) => void; // NEW: Triggers save for later
 }
 
 export default function PinDetailModal({
@@ -24,7 +26,9 @@ export default function PinDetailModal({
   onOpenAuth,
   isDarkMode,
   onMessageMaker,
-  lang
+  lang,
+  onOpenCheckout,
+  onToggleSave
 }: PinDetailModalProps) {
   const [comments, setComments] = useState<Comment[]>([]);
   const [newCommentText, setNewCommentText] = useState('');
@@ -33,6 +37,11 @@ export default function PinDetailModal({
   
   // NEW: State to hold the Telegram profile photo URL
   const [telegramPhotoUrl, setTelegramPhotoUrl] = useState<string | undefined>();
+
+  // NEW: Engagement States
+  const [isSaved, setIsSaved] = useState(false);
+  const [isLiked, setIsLiked] = useState(false);
+  const [likesCount, setLikesCount] = useState(post?.likes_count || 0);
 
   // NEW: Fetch Telegram photo on mount
   useEffect(() => {
@@ -75,19 +84,16 @@ export default function PinDetailModal({
         post_id: post.id,
         user_id: user.uid,
         username: profile?.full_name || user.displayName || 'Artisan',
-        // UPDATED: Use smart avatar logic
         avatar_url: getUserAvatar(profile, telegramPhotoUrl),
         content: newCommentText.trim()
       };
 
       await addComment(post.id, commentData);
       
-      // Create a real-time Notification in the database for the post author!
       if (post.user_id !== user.uid) {
         await createNotification({
           user_id: post.user_id,
           sender_name: profile?.full_name || user.displayName || 'Artisan',
-          // UPDATED: Use smart avatar logic
           sender_avatar: getUserAvatar(profile, telegramPhotoUrl),
           type: 'comment',
           post_id: post.id,
@@ -98,7 +104,6 @@ export default function PinDetailModal({
         });
       }
       
-      // Update local comment list
       setComments(prev => [...prev, {
         id: `temp_${Date.now()}`,
         ...commentData,
@@ -117,7 +122,6 @@ export default function PinDetailModal({
       await createNotification({
         user_id: post.user_id,
         sender_name: profile?.full_name || user?.displayName || 'Artisan Buyer',
-        // UPDATED: Use smart avatar logic
         sender_avatar: getUserAvatar(profile, telegramPhotoUrl),
         type: 'telegram',
         post_id: post.id,
@@ -131,20 +135,61 @@ export default function PinDetailModal({
     }
   };
 
+  // NEW: Handle Save for Later
+  const handleSaveForLater = () => {
+    if (!user) {
+      onOpenAuth();
+      return;
+    }
+    const newState = !isSaved;
+    setIsSaved(newState);
+    if (onToggleSave) {
+      onToggleSave(post.id, newState);
+    }
+  };
+
+  // NEW: Handle Like
+  const handleLike = () => {
+    if (!user) {
+      onOpenAuth();
+      return;
+    }
+    const newState = !isLiked;
+    setIsLiked(newState);
+    setLikesCount(prev => newState ? prev + 1 : prev - 1);
+    // In a full implementation, you would call an API here: await likePost(post.id);
+  };
+
+  // NEW: Handle Purchase Now
+  const handlePurchaseNow = () => {
+    if (!user) {
+      onOpenAuth();
+      return;
+    }
+    if (onOpenCheckout) {
+      onOpenCheckout(post);
+    } else {
+      console.log("Proceeding to checkout for:", post.id);
+      // Fallback alert if parent component hasn't implemented onOpenCheckout yet
+      alert("Checkout flow will open here!");
+    }
+  };
+
   const t = translations[lang];
   const activeColor = isDarkMode ? 'text-[#D4AF37]' : 'text-[#E07A5F]';
   const activeBg = isDarkMode ? 'bg-[#D4AF37] hover:bg-opacity-90 text-black' : 'bg-[#E07A5F] hover:bg-opacity-90 text-white';
-  const activeBorder = isDarkMode ? 'border-[#D4AF37]' : 'border-[#E07A5F]';
-
-  // NEW: Pre-calculate avatars for rendering
+  
   const userAvatar = getUserAvatar(profile, telegramPhotoUrl);
   const postAuthorAvatar = getPostAuthorAvatar(post.user_id, post.author_avatar);
+  
+  // Safe fallback for stock quantity
+  const availableStock = post.stock_quantity ?? 1;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fade-in">
       <div 
         id="pin-detail-card"
-        className={`relative w-full max-w-4xl rounded-3xl p-0 overflow-hidden shadow-2xl border flex flex-col md:flex-row max-h-[90vh] transition-all duration-300 ${
+        className={`relative w-full max-w-5xl rounded-3xl p-0 overflow-hidden shadow-2xl border flex flex-col md:flex-row max-h-[90vh] transition-all duration-300 ${
           isDarkMode 
             ? 'bg-[#1A1A1A] text-[#EAEAEA] border-[#2D2D2D]' 
             : 'bg-[#FDFBF7] text-[#2C2C2C] border-[#EBE7DF]'
@@ -172,7 +217,6 @@ export default function PinDetailModal({
             className="w-full h-full object-cover max-h-[50vh] md:max-h-[90vh]"
             style={{ pointerEvents: 'none' }}
           />
-          {/* Subtle Permanent Anti-Piracy Watermark Overlay */}
           <div className="absolute bottom-4 left-4 select-none pointer-events-none text-white/40 text-[9px] tracking-widest font-mono border border-white/10 bg-black/20 px-2 py-0.5 rounded-md">
             WING Anti-Draggable Lock Active
           </div>
@@ -180,10 +224,10 @@ export default function PinDetailModal({
 
         {/* Right Side: Details & Interaction */}
         <div className="w-full md:w-1/2 flex flex-col h-full overflow-y-auto p-6 md:p-8 max-h-[50vh] md:max-h-[90vh]">
-          {/* Top section: Maker Profile */}
+          
+          {/* 1. Maker Profile */}
           <div className="flex items-center justify-between pb-4 border-b border-black/5 dark:border-white/5 mb-6">
             <div className="flex items-center gap-3">
-              {/* UPDATED: Use smart post author avatar */}
               <img
                 src={postAuthorAvatar}
                 alt={post.author_name}
@@ -196,38 +240,18 @@ export default function PinDetailModal({
               </div>
             </div>
 
-            {/* Message Maker & Telegram Coordinator Actions (if not messaging self) */}
             {user?.uid !== post.user_id && (
-              <div className="flex flex-col sm:flex-row gap-2 shrink-0">
-                {/* Buy via Telegram Bot (UPDATED TO QR_ DEEP LINK) */}
-                <a
-                  id="telegram-contact-btn"
-                  href={`https://t.me/WingArtisanBot?start=qr_${post.id}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  onClick={handleTelegramClick}
-                  className={`flex items-center justify-center gap-1.5 px-3 py-2 rounded-full text-[11px] font-bold shadow-md transition-all hover:scale-102 active:scale-98 text-white ${
-                    isDarkMode ? 'bg-[#229ED9] hover:bg-[#229ED9]/90' : 'bg-[#0088cc] hover:bg-[#0088cc]/90'
-                  }`}
-                >
-                  <ShieldCheck className="w-3 h-3" />
-                  <span>{t.contactSellerTelegram || 'Secure Purchase'}</span>
-                </a>
-
-                {/* Direct Message on Site */}
-                <button
-                  id="message-maker-btn"
-                  onClick={() => onMessageMaker(post.user_id, post.author_name)}
-                  className={`flex items-center justify-center gap-1.5 px-3 py-2 rounded-full text-[11px] font-bold shadow transition-all focus:scale-95 duration-150 ${activeBg}`}
-                >
-                  <Mail className="w-3 h-3" />
-                  <span>{t.contactSellerWeb || 'Message Maker'}</span>
-                </button>
-              </div>
+              <button
+                onClick={() => onMessageMaker(post.user_id, post.author_name)}
+                className={`flex items-center justify-center gap-1.5 px-3 py-2 rounded-full text-[11px] font-bold shadow transition-all focus:scale-95 duration-150 ${activeBg}`}
+              >
+                <Mail className="w-3 h-3" />
+                <span>{t.contactSellerWeb || 'Message Maker'}</span>
+              </button>
             )}
           </div>
 
-          {/* Body Caption & Badges */}
+          {/* 2. Caption & Badges */}
           <div className="space-y-4 mb-6">
             <div className="flex items-center gap-2">
               <span className={`text-[9px] px-2.5 py-1 rounded-full font-bold tracking-wider uppercase ${
@@ -241,13 +265,62 @@ export default function PinDetailModal({
                 <ShieldCheck className="w-3.5 h-3.5" /> Original Artisan Craft
               </span>
             </div>
-
             <p className="text-sm leading-relaxed whitespace-pre-line opacity-90">
               {post.caption}
             </p>
           </div>
 
-          {/* Materials & Tools grids */}
+          {/* 3. MODERN WING BUY BOX (Amazon-style) */}
+          <div className={`p-6 rounded-3xl border mb-6 transition-all ${isDarkMode ? 'bg-[#111] border-gray-800' : 'bg-white border-gray-200 shadow-sm'}`}>
+            <div className="flex items-end justify-between mb-4">
+              <div>
+                <span className={`text-3xl font-black ${activeColor}`}>{post.price.toLocaleString()} ETB</span>
+                <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wider mt-1">Includes WING Buyer Protection</p>
+              </div>
+              <div className="text-right">
+                <div className="flex items-center gap-1.5 text-xs font-bold text-gray-500">
+                  <ShieldCheck className="w-3.5 h-3.5 text-green-500" />
+                  <span>Verified Seller</span>
+                </div>
+              </div>
+            </div>
+            
+            <div className="flex items-center gap-2 mb-5 text-sm">
+              <div className={`w-2.5 h-2.5 rounded-full ${availableStock > 0 ? 'bg-green-500' : 'bg-red-500'}`}></div>
+              <span className={`font-bold ${availableStock > 0 ? 'text-green-600' : 'text-red-500'}`}>
+                {availableStock > 0 ? `In Stock (${availableStock} available)` : 'Currently Out of Stock'}
+              </span>
+            </div>
+
+            <div className="space-y-3">
+              <button 
+                onClick={handlePurchaseNow}
+                disabled={availableStock === 0}
+                className={`w-full py-4 rounded-2xl font-black text-sm uppercase tracking-wider shadow-lg transition-all active:scale-[0.98] flex items-center justify-center gap-2 ${
+                  availableStock === 0
+                    ? 'bg-gray-300 text-gray-500 cursor-not-allowed' 
+                    : activeBg
+                }`}
+              >
+                <ShoppingCart className="w-5 h-5" />
+                Purchase Now
+              </button>
+              
+              <button 
+                onClick={handleSaveForLater}
+                className={`w-full py-3.5 rounded-2xl font-bold text-sm uppercase tracking-wider border-2 transition-all active:scale-[0.98] flex items-center justify-center gap-2 ${
+                  isSaved 
+                    ? 'border-green-500 text-green-600 bg-green-500/10' 
+                    : isDarkMode ? 'border-gray-700 text-gray-300 hover:bg-gray-800' : 'border-gray-200 text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                <Bookmark className={`w-4 h-4 ${isSaved ? 'fill-current' : ''}`} />
+                {isSaved ? 'Saved for Later' : 'Save for Later'}
+              </button>
+            </div>
+          </div>
+
+          {/* 4. Materials & Tools grids */}
           <div className="grid grid-cols-2 gap-4 mb-6 p-4 rounded-2xl bg-black/5 dark:bg-white/5">
             <div>
               <h5 className="text-xs font-bold uppercase tracking-wider mb-2 flex items-center gap-1.5 opacity-80">
@@ -280,13 +353,29 @@ export default function PinDetailModal({
             </div>
           </div>
 
-          {/* Comments Section */}
+          {/* 5. Social Proof & Comments Section */}
           <div className="flex-1 flex flex-col min-h-[200px] border-t border-black/5 dark:border-white/5 pt-4">
+            
+            {/* Social Proof Bar */}
+            <div className="flex items-center gap-6 mb-4 pb-4 border-b border-black/5 dark:border-white/5">
+              <button 
+                onClick={handleLike}
+                className={`flex items-center gap-2 text-sm font-bold transition-all ${isLiked ? 'text-red-500' : 'text-gray-500 hover:text-red-500'}`}
+              >
+                <Heart className={`w-5 h-5 ${isLiked ? 'fill-current' : ''}`} />
+                {likesCount} Likes
+              </button>
+              <div className="flex items-center gap-2 text-sm font-bold text-gray-500">
+                <MessageSquare className="w-5 h-5" />
+                {comments.length} Comments
+              </div>
+            </div>
+
             <h5 className="text-xs font-bold uppercase tracking-wider mb-3 flex items-center gap-1.5">
-              <MessageSquare className="w-4 h-4" /> Discussion ({comments.length})
+              <MessageSquare className="w-4 h-4" /> Discussion
             </h5>
 
-            {/* List */}
+            {/* Comments List */}
             <div className="flex-1 overflow-y-auto space-y-3.5 max-h-[220px] pr-2 mb-4">
               {loadingComments ? (
                 <div className="py-6 text-center text-xs text-gray-400 font-mono">Loading thoughts...</div>
@@ -309,10 +398,9 @@ export default function PinDetailModal({
                           <span className="font-bold">{comm.username}</span>
                           {user?.uid !== comm.user_id && (
                             <button
-                              id={`message-commenter-${comm.id}`}
                               type="button"
                               onClick={() => {
-                                onClose(); // Close pin modal first
+                                onClose();
                                 onMessageMaker(comm.user_id, comm.username);
                               }}
                               className="p-1 hover:bg-black/10 dark:hover:bg-white/10 rounded-full transition-colors text-gray-500 hover:text-amber-500 cursor-pointer"
@@ -333,7 +421,7 @@ export default function PinDetailModal({
               )}
             </div>
 
-            {/* Input form */}
+            {/* Comment Input Form */}
             <form onSubmit={handleAddComment} className="flex gap-2">
               <input
                 id="comment-input"
