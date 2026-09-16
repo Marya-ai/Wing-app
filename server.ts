@@ -83,7 +83,7 @@ async function getAIResponse(prompt: string): Promise<string> {
   }
 }
 
-// --- 2. DATABASE INITIALIZATION (PLAN A UPGRADED) ---
+// --- 2. DATABASE INITIALIZATION (MANAGED MARKETPLACE UPGRADED) ---
 async function initDatabase() {
   const query = `
     CREATE TABLE IF NOT EXISTS users (
@@ -110,6 +110,8 @@ async function initDatabase() {
       image_url TEXT,
       price NUMERIC,
       qr_token TEXT,
+      seller_subcity TEXT,
+      stock_quantity INTEGER DEFAULT 1,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -125,6 +127,27 @@ async function initDatabase() {
       expected_amount NUMERIC,
       token TEXT,
       status TEXT DEFAULT 'PENDING_BUYER_PAYMENT',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- 🆕 NEW: Managed Marketplace Orders Table
+    CREATE TABLE IF NOT EXISTS orders (
+      id SERIAL PRIMARY KEY,
+      order_token TEXT UNIQUE,
+      buyer_id BIGINT,
+      seller_id BIGINT,
+      post_id INTEGER,
+      quantity INTEGER DEFAULT 1,
+      selected_color TEXT,
+      buyer_subcity TEXT,
+      buyer_address TEXT,
+      buyer_phone TEXT,
+      delivery_method TEXT,
+      item_price NUMERIC,
+      commission_fee NUMERIC,
+      delivery_fee NUMERIC,
+      total_amount NUMERIC,
+      status TEXT DEFAULT 'pending_payment',
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -154,11 +177,14 @@ async function initDatabase() {
     ALTER TABLE commissions ADD COLUMN IF NOT EXISTS expected_amount NUMERIC;
     ALTER TABLE commissions ADD COLUMN IF NOT EXISTS token TEXT;
     ALTER TABLE commissions ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'PENDING_BUYER_PAYMENT';
+
+    ALTER TABLE wing_masterpieces ADD COLUMN IF NOT EXISTS seller_subcity TEXT;
+    ALTER TABLE wing_masterpieces ADD COLUMN IF NOT EXISTS stock_quantity INTEGER DEFAULT 1;
   `;
   
   try {
     await pool.query(query);
-    console.log("🛡️ Database Patched: Auth, Escrow, and Privacy columns ready.");
+    console.log("🛡️ Database Patched: Auth, Escrow, Privacy, and Managed Orders ready.");
   } catch (err: any) { 
     console.error("⚠️ DB Init Error:", err.message); 
   }
@@ -166,7 +192,7 @@ async function initDatabase() {
 
 // --- 3. AUTHENTICATION API ENDPOINTS ---
 
-// REGISTER (UPDATED WITH PHONE & ROLE)
+// REGISTER
 app.post('/api/auth/register', authLimiter, async (req, res) => {
   try {
     const { email, password, full_name, username, phone_number, telegram_id, role, business_scale, tg_wallet, tiktok, agreed_to_terms } = req.body;
@@ -341,7 +367,109 @@ app.get('/api/auth/verify', async (req, res) => {
   }
 });
 
-// --- 4. TELEGRAM UTILITIES ---
+// --- 4. MANAGED MARKETPLACE API ENDPOINTS (NEW) ---
+
+// CREATE ORDER (Checkout)
+app.post('/api/orders', async (req, res) => {
+  try {
+    const { buyer_id, post_id, quantity, selected_color, buyer_subcity, buyer_address, buyer_phone, delivery_method } = req.body;
+    
+    // Fetch post and seller info
+    const postRes = await pool.query('SELECT * FROM wing_masterpieces WHERE id = $1', [post_id]);
+    const post = postRes.rows[0];
+    if (!post) return res.status(404).json({ error: "Item not found" });
+
+    const sellerRes = await pool.query('SELECT telegram_id, business_scale FROM users WHERE telegram_id = $1', [post.user_id]);
+    const seller = sellerRes.rows[0];
+    if (!seller) return res.status(404).json({ error: "Seller not found" });
+
+    // Calculate fees
+    const item_price = parseFloat(post.price) * (quantity || 1);
+    const baseRate = seller.business_scale === 'small' ? 0.10 : seller.business_scale === 'medium' ? 0.15 : 0.25;
+    const commission_fee = Math.ceil(item_price * baseRate);
+    
+    // Simple delivery fee logic (Addis Ababa zones)
+    let delivery_fee = 100; // Default motorbike fee
+    if (buyer_subcity === 'Ayat' || buyer_subcity === 'Kaliti' || buyer_subcity === 'Legetafo' || buyer_subcity === 'Burayu') {
+      delivery_fee = 150; // Far distance
+    }
+    if (delivery_method === 'isuzu') {
+      delivery_fee += 150; // Extra for large items
+    }
+
+    const total_amount = item_price + commission_fee + delivery_fee;
+    const order_token = `ORD-${crypto.randomUUID().split('-')[0].toUpperCase()}`;
+
+    const result = await pool.query(
+      `INSERT INTO orders (order_token, buyer_id, seller_id, post_id, quantity, selected_color, buyer_subcity, buyer_address, buyer_phone, delivery_method, item_price, commission_fee, delivery_fee, total_amount, status) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'pending_payment') RETURNING *`,
+      [order_token, buyer_id, seller.telegram_id, post_id, quantity || 1, selected_color, buyer_subcity, buyer_address, buyer_phone, delivery_method, item_price, commission_fee, delivery_fee, total_amount]
+    );
+
+    // Notify Admin for Dispatch
+    await sendTG(ADMIN_ID, 
+      `🆕 *NEW WING ORDER!* 🆕\n` +
+      `Token: \`${order_token}\`\n` +
+      `Item: ${post.caption.slice(0, 30)}...\n` +
+      `Pickup: Seller in ${post.seller_subcity || 'Unknown'}\n` +
+      `Dropoff: ${buyer_subcity} - ${buyer_address}\n` +
+      `Buyer Phone: \`${buyer_phone}\`\n` +
+      `Total: ${total_amount} ETB (Item: ${item_price} | Comm: ${commission_fee} | Del: ${delivery_fee})\n\n` +
+      `Awaiting buyer payment...`
+    );
+
+    res.status(201).json({ success: true, order: result.rows[0], total_amount, order_token });
+  } catch (err: any) {
+    console.error("Create Order Error:", err);
+    res.status(500).json({ error: "Failed to create order" });
+  }
+});
+
+// ADMIN: GET ALL ORDERS (For Dispatch Dashboard)
+app.get('/api/admin/orders', async (req, res) => {
+  try {
+    // Note: In production, add admin authentication middleware here
+    const result = await pool.query(`
+      SELECT o.*, p.caption as item_name, u.full_name as buyer_name 
+      FROM orders o
+      LEFT JOIN wing_masterpieces p ON o.post_id = p.id
+      LEFT JOIN users u ON o.buyer_id = u.telegram_id
+      ORDER BY o.created_at DESC
+    `);
+    res.json(result.rows);
+  } catch (err: any) {
+    res.status(500).json({ error: "Failed to fetch orders" });
+  }
+});
+
+// ADMIN: UPDATE ORDER STATUS
+app.put('/api/admin/orders/:id/status', async (req, res) => {
+  try {
+    const { status } = req.body; // e.g., 'paid', 'dispatched', 'delivered'
+    const result = await pool.query('UPDATE orders SET status = $1 WHERE id = $2 RETURNING *', [status, req.params.id]);
+    
+    if (result.rows.length > 0) {
+      const order = result.rows[0];
+      
+      // Notify seller if dispatched (Ghost Fulfillment: Seller only knows it's going to WING Courier)
+      if (status === 'dispatched') {
+        await sendTG(order.seller_id, `📦 *WING COURIER DISPATCHED*\n\nPlease have your item ready for the WING Courier pickup. Do not share buyer details.`);
+      }
+      
+      // Notify buyer if delivered
+      if (status === 'delivered') {
+        await sendTG(order.buyer_id, `🎉 *DELIVERED!*\n\nYour WING order has arrived safely. Thank you for supporting local artisans!`);
+        // TODO: Trigger seller payout logic here (or handle manually via Admin for now)
+      }
+    }
+    
+    res.json({ success: true, order: result.rows[0] });
+  } catch (err: any) {
+    res.status(500).json({ error: "Failed to update order status" });
+  }
+});
+
+// --- 5. TELEGRAM UTILITIES ---
 async function sendTG(chatId: string | number, text: string, keyboard?: any) {
   const body: any = { chat_id: chatId, text, parse_mode: "Markdown" };
   if (keyboard) body.reply_markup = keyboard;
@@ -364,7 +492,7 @@ async function answerCbQuery(id: string, text: string) {
   } catch (e) {}
 }
 
-// --- 5. THE MASTER TELEGRAM ENGINE (ESCROW LOGIC) ---
+// --- 6. THE MASTER TELEGRAM ENGINE ---
 async function startTelegramBotPolling() {
   if (!TELEGRAM_TOKEN) return;
   try { await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/deleteWebhook`); } catch (e) {}
@@ -403,8 +531,8 @@ async function startTelegramBotPolling() {
             const payload = text.split(" ")[1];
             if (payload?.startsWith("qr_")) {
                 const postId = payload.replace("qr_", "");
-                await sendTG(chatId, `🛡️ *SECURE ESCROW PURCHASE*\n\nYou are about to buy Item #${postId}.\nFunds will be held safely by WING until delivery.\n\nProceed?`, {
-                    inline_keyboard: [[{ text: "✅ Yes, Proceed to Payment", callback_data: `confirm_buy_${postId}` }]]
+                await sendTG(chatId, `🛡️ *SECURE WING PURCHASE*\n\nYou are about to buy Item #${postId}.\nFunds will be held safely by WING until our courier delivers it.\n\nProceed to Web App Checkout?`, {
+                    inline_keyboard: [[{ text: "✅ Yes, Open Checkout", web_app: { url: "https://wing-artisan-bot.onrender.com" } }]]
                 });
                 continue;
             }
@@ -415,7 +543,7 @@ async function startTelegramBotPolling() {
             continue;
         }
 
-        // 🛒 BUYER CONFIRMATION (ESCROW INITIATION)
+        // 🛒 BUYER CONFIRMATION (ESCROW INITIATION - Legacy/Bot Native)
         if (update.callback_query) {
             const cbData = update.callback_query.data;
             
@@ -451,7 +579,7 @@ async function startTelegramBotPolling() {
                           `*Total to Pay: ${expectedAmount} ETB*\n\n` +
                           `💸 Send exactly *${expectedAmount} ETB* to WING Telebirr: \`${TELEBIRR_NUMBER}\`\n` +
                           `_(The .${uniqueCode} is your unique code. Do not send ${totalPrice}.00)._\n\n` +
-                          `Once paid, the admin will verify and connect you with the seller.\n🔑 Your Secure Token: \`${token}\``
+                          `Once paid, the WING Courier will be dispatched to the seller, and then to you.\n🔑 Your Secure Token: \`${token}\``
                         );
 
                         await sendTG(ADMIN_ID, 
@@ -472,8 +600,8 @@ async function startTelegramBotPolling() {
                 const commRes = await pool.query("UPDATE commissions SET status = 'ACTIVE' WHERE token = $1 RETURNING *", [token]);
                 if (commRes.rows.length > 0) {
                     const comm = commRes.rows[0];
-                    await sendTG(comm.seller_id, `✅ Sale Confirmed!\n\nBuyer Telegram ID: \`${comm.buyer_id}\`\nShare your delivery details with them.`);
-                    await sendTG(comm.buyer_id, `✅ Seller Confirmed!\n\nSeller Telegram ID: \`${comm.seller_id}\`\nContact them to arrange delivery.`);
+                    await sendTG(comm.seller_id, `✅ Sale Confirmed!\n\nPlease prepare the item for WING Courier pickup.`);
+                    await sendTG(comm.buyer_id, `✅ Seller Confirmed!\n\nWING Courier will deliver your item shortly.`);
                     await sendTG(ADMIN_ID, `✅ Deal Active for Token: ${token}`);
                 }
                 await answerCbQuery(update.callback_query.id, "Sale confirmed!");
@@ -501,17 +629,17 @@ async function startTelegramBotPolling() {
             
             if (commRes.rows.length > 0) {
                 const comm = commRes.rows[0];
-                await sendTG(ADMIN_ID, `✅ Buyer payment verified for code ${code}. Asking seller to confirm.`);
+                await sendTG(ADMIN_ID, `✅ Buyer payment verified for code ${code}. Asking seller to prepare for courier.`);
                 
                 await sendTG(comm.seller_id, 
                   `💰 *FUNDS SECURED BY WING!*\n\n` +
-                  `A buyer has paid ${comm.total_amount} ETB for Item #${comm.post_id}.\n` +
+                  `A buyer has paid for Item #${comm.post_id}.\n` +
                   `Your payout will be *${comm.item_price} ETB* (WING keeps ${comm.commission_amount} ETB fee).\n\n` +
-                  `⚠️ FINAL CHECK: Are you ready to sell this item?\n` +
-                  `[ ✅ Confirm Sale ]  [ ❌ Cancel & Refund ]`,
+                  `⚠️ FINAL CHECK: Is the item ready for WING Courier pickup?\n` +
+                  `[ ✅ Confirm Ready ]  [ ❌ Cancel & Refund ]`,
                   {
                     inline_keyboard: [[
-                      { text: "✅ Confirm Sale", callback_data: `final_confirm_${comm.token}` },
+                      { text: "✅ Confirm Ready", callback_data: `final_confirm_${comm.token}` },
                       { text: "❌ Cancel & Refund", callback_data: `cancel_refund_${comm.token}` }
                     ]]
                   }
@@ -571,7 +699,7 @@ async function startTelegramBotPolling() {
           continue;
         }
         if (state && state.mode === 'APPLY') {
-            if (state.step === 1) { state.data.craft = text; state.step = 2; await sendTG(chatId, "📍 Workshop location?"); }
+            if (state.step === 1) { state.data.craft = text; state.step = 2; await sendTG(chatId, "📍 Workshop location (Sub-city)?"); }
             else if (state.step === 2) { state.data.loc = text; state.step = 3; await sendTG(chatId, "📸 Send a photo of your work."); }
             else if (state.step === 3 && update.message.photo) {
               await sendTG(chatId, "✅ Application submitted!");
@@ -596,7 +724,7 @@ async function startTelegramBotPolling() {
   }
 }
 
-// --- 6. SERVER STARTUP & STATIC FILE SERVING ---
+// --- 7. SERVER STARTUP & STATIC FILE SERVING ---
 async function startServer() {
   await initDatabase();
   startTelegramBotPolling();
